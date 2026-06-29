@@ -47,6 +47,31 @@ type Course struct {
 	Operation    string `json:"czOper"`
 }
 
+func (c *Course) UnmarshalJSON(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	c.LessonID = rawString(raw["jx0404id"])
+	c.EnrollID = rawString(raw["jx02id"])
+	c.Code = rawString(raw["kch"])
+	c.Name = rawString(raw["kcmc"])
+	c.GroupName = rawString(raw["fzmc"])
+	c.Credit = rawString(raw["xf"])
+	c.Teacher = rawString(raw["skls"])
+	c.Time = rawString(raw["sksj"])
+	c.Location = rawString(raw["skdd"])
+	c.Campus = rawString(raw["xqmc"])
+	c.Enrolled = rawString(raw["xkrs"])
+	c.Remaining = rawString(raw["syrs"])
+	c.TeachMode = rawString(raw["skfsmc"])
+	c.ConflictNote = rawString(raw["ctsm"])
+	c.Operation = rawString(raw["czOper"])
+
+	return nil
+}
+
 type SearchOptions struct {
 	Keyword string
 	Filters map[string]string
@@ -156,6 +181,32 @@ func CleanHTMLBreaks(value string) string {
 	value = strings.ReplaceAll(value, "<br />", " ")
 	value = strings.ReplaceAll(value, "<br>", " ")
 	return strings.Join(strings.Fields(value), " ")
+}
+
+func rawString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+
+	var str string
+	if err := json.Unmarshal(raw, &str); err == nil {
+		return str
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err == nil {
+		return number.String()
+	}
+
+	var boolean bool
+	if err := json.Unmarshal(raw, &boolean); err == nil {
+		if boolean {
+			return "true"
+		}
+		return "false"
+	}
+
+	return string(raw)
 }
 
 func buildSearchParams(courseType CourseType, keyword string, filters map[string]string) url.Values {

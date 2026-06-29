@@ -36,7 +36,7 @@ func main() {
 		return
 	}
 	courseType := enrollment.CourseTypeInPlan
-	keyword := ""
+	keyword := "人"
 	filterKeywords := []string{}
 
 	// login with account and passwrod
@@ -50,10 +50,12 @@ func main() {
 	if !ok {
 		fmt.Println("failed to find course selection link")
 		return
+	}else {
+		fmt.Println("Login success")
 	}
 
-	fmt.Println(xkURL)
-	fmt.Println(parser.CheckLoginStatus(globalClient))
+	// fmt.Println(xkURL)
+	// fmt.Println(parser.CheckLoginStatus(globalClient))
 
 	xkid, err := initEnrollment(globalClient, xkURL)
 	if err != nil {

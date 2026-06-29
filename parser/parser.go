@@ -2,6 +2,7 @@ package parser
 
 import (
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
@@ -33,12 +34,18 @@ func ExtractLtFromLogin(body string) (string, bool) {
 }
 
 func ExtractXklc(body string) (string, bool) {
-	doc, _ := goquery.NewDocumentFromReader(strings.NewReader(body))
+	doc, err := goquery.NewDocumentFromReader(strings.NewReader(body))
+	if err != nil {
+		return "", false
+	}
 
 	selector := `a[href^="/jsxsd/xsxk/xklc_list"]`
 	link := doc.Find(selector).First()
 
-	href, _ := link.Attr("href")
+	href, exists := link.Attr("href")
+	if !exists || strings.TrimSpace(href) == "" {
+		return "", false
+	}
 
 	baseURL, err := url.Parse("https://jw.stu.edu.cn/")
 	if err != nil {
@@ -53,6 +60,12 @@ func ExtractXklc(body string) (string, bool) {
 	fullURL := baseURL.ResolveReference(hrefURL).String()
 
 	return fullURL, true
+}
+
+func ExtractXkid(body string) (string, bool) {
+	re := regexp.MustCompile(`[A-F0-9]{32}`)
+	xkid := re.FindString(body)
+	return xkid, xkid != ""
 }
 
 func CheckLoginStatus(client *httpclient.Client) bool {

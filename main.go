@@ -56,6 +56,16 @@ var cookieCacheURLs = []string{
 func main() {
 	globalClient = httpclient.New()
 
+	createdFiles, err := ensureLocalConfigFiles("secret.json", "enroll_config.json")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+	if len(createdFiles) > 0 {
+		fmt.Printf("%s created, please fill and edit them before running\n", strings.Join(createdFiles, ", "))
+		return
+	}
+
 	config, err := loadEnrollConfig("enroll_config.json")
 	if err != nil {
 		fmt.Println(err)
@@ -344,36 +354,8 @@ func loadEnrollConfig(path string) (enrollConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			template := enrollConfig{
-				IntervalSeconds: 3,
-				Courses: []courseTarget{
-					{
-						Name:                    "示例计划内课程",
-						Type:                    "inplan",
-						Keyword:                 "课程关键词",
-						Enabled:                 true,
-						FuzzyFilterKeywords:     []string{"不想要的教师或课程片段"},
-						ExactFilterKeywords:     []string{"精确排除的教师或课程名"},
-						RequestDelaySeconds:     0.5,
-						ContinueAfterSuccessful: false,
-					},
-					{
-						Name:                    "示例公选课",
-						Type:                    "public",
-						Keyword:                 "公选课关键词",
-						Enabled:                 false,
-						RequestDelaySeconds:     0.5,
-						ContinueAfterSuccessful: false,
-					},
-				},
-			}
-			content, marshalErr := json.MarshalIndent(template, "", "  ")
-			if marshalErr != nil {
-				return enrollConfig{}, fmt.Errorf("build enroll config template: %w", marshalErr)
-			}
-			content = append(content, '\n')
-			if writeErr := os.WriteFile(path, content, 0600); writeErr != nil {
-				return enrollConfig{}, fmt.Errorf("create %s: %w", path, writeErr)
+			if writeErr := writeJSONFile(path, defaultEnrollConfig()); writeErr != nil {
+				return enrollConfig{}, writeErr
 			}
 			return enrollConfig{}, fmt.Errorf("%s created, please edit course targets before running", path)
 		}
@@ -411,17 +393,8 @@ func loadLoginInfo(path string) (loginInfo, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			template := secretConfig{
-				Username: "",
-				Password: "",
-			}
-			content, marshalErr := json.MarshalIndent(template, "", "  ")
-			if marshalErr != nil {
-				return loginInfo{}, fmt.Errorf("build secret template: %w", marshalErr)
-			}
-			content = append(content, '\n')
-			if writeErr := os.WriteFile(path, content, 0600); writeErr != nil {
-				return loginInfo{}, fmt.Errorf("create %s: %w", path, writeErr)
+			if writeErr := writeJSONFile(path, defaultSecretConfig()); writeErr != nil {
+				return loginInfo{}, writeErr
 			}
 			return loginInfo{}, fmt.Errorf("%s created, please fill username and password", path)
 		}
@@ -440,4 +413,75 @@ func loadLoginInfo(path string) (loginInfo, error) {
 		username: config.Username,
 		password: config.Password,
 	}, nil
+}
+
+func ensureLocalConfigFiles(secretPath string, enrollConfigPath string) ([]string, error) {
+	checks := []struct {
+		path     string
+		template any
+	}{
+		{path: secretPath, template: defaultSecretConfig()},
+		{path: enrollConfigPath, template: defaultEnrollConfig()},
+	}
+
+	var created []string
+	for _, check := range checks {
+		if _, err := os.Stat(check.path); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return created, fmt.Errorf("check %s: %w", check.path, err)
+		}
+
+		if err := writeJSONFile(check.path, check.template); err != nil {
+			return created, err
+		}
+		created = append(created, check.path)
+	}
+
+	return created, nil
+}
+
+func writeJSONFile(path string, value any) error {
+	content, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return fmt.Errorf("build %s template: %w", path, err)
+	}
+	content = append(content, '\n')
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	return nil
+}
+
+func defaultSecretConfig() secretConfig {
+	return secretConfig{
+		Username: "",
+		Password: "",
+	}
+}
+
+func defaultEnrollConfig() enrollConfig {
+	return enrollConfig{
+		IntervalSeconds: 3,
+		Courses: []courseTarget{
+			{
+				Name:                    "示例计划内课程",
+				Type:                    "inplan",
+				Keyword:                 "课程关键词",
+				Enabled:                 true,
+				FuzzyFilterKeywords:     []string{"不想要的教师或课程片段"},
+				ExactFilterKeywords:     []string{"精确排除的教师或课程名"},
+				RequestDelaySeconds:     0.5,
+				ContinueAfterSuccessful: false,
+			},
+			{
+				Name:                    "示例公选课",
+				Type:                    "public",
+				Keyword:                 "公选课关键词",
+				Enabled:                 false,
+				RequestDelaySeconds:     0.5,
+				ContinueAfterSuccessful: false,
+			},
+		},
+	}
 }

@@ -267,6 +267,11 @@ func runEnrollmentLoop(client *httpclient.Client, config enrollConfig) {
 				continue
 			}
 
+			fmt.Println("waiting 1s before enrollment requests")
+			if !sleepOrStop(time.Second, stop) {
+				return
+			}
+
 			for _, course := range courses {
 				select {
 				case <-stop:

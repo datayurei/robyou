@@ -1,0 +1,158 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag, for example v1.0.0
+        required: true
+        type: string
+      release_name:
+        description: Release name. Defaults to the tag when empty.
+        required: false
+        type: string
+      prerelease:
+        description: Mark this release as a prerelease.
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+  build:
+    name: Build ${{ matrix.goos }} ${{ matrix.goarch }}
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: linux
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: amd64
+            ext: ""
+            archive: tar.gz
+          - goos: darwin
+            goarch: arm64
+            ext: ""
+            archive: tar.gz
+          - goos: windows
+            goarch: amd64
+            ext: ".exe"
+            archive: zip
+          - goos: windows
+            goarch: arm64
+            ext: ".exe"
+            archive: zip
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          BINARY_NAME: robyou${{ matrix.ext }}
+        run: |
+          mkdir -p "dist/robyou_${GOOS}_${GOARCH}"
+          go build -trimpath -ldflags="-s -w" -o "dist/robyou_${GOOS}_${GOARCH}/${BINARY_NAME}" .
+          cp README.md LICENSE "dist/robyou_${GOOS}_${GOARCH}/"
+
+      - name: Package tarball
+        if: matrix.archive == 'tar.gz'
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          cd dist
+          tar -czf "robyou_${GOOS}_${GOARCH}.tar.gz" "robyou_${GOOS}_${GOARCH}"
+
+      - name: Package zip
+        if: matrix.archive == 'zip'
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          cd dist
+          zip -r "robyou_${GOOS}_${GOARCH}.zip" "robyou_${GOOS}_${GOARCH}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: robyou-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: Create release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          RELEASE_NAME: ${{ inputs.release_name }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          if [ -z "${RELEASE_NAME}" ]; then
+            RELEASE_NAME="${TAG}"
+          fi
+
+          args=(
+            release create "${TAG}"
+            release-assets/*
+            --title "${RELEASE_NAME}"
+            --generate-notes
+            --target "${GITHUB_SHA}"
+          )
+
+          if [ "${PRERELEASE}" = "true" ]; then
+            args+=(--prerelease)
+          fi
+
+          gh "${args[@]}"

@@ -124,9 +124,3 @@ GitHub Actions builds binaries for:
 - Windows amd64 / arm64
 
 Artifacts are available from the workflow run page.
-
-## Notes
-
-- `xkid` is extracted from the active course-selection round and used to initialize the enrollment session before polling.
-- The program exits after all enabled targets have successfully completed, unless a target uses `continue_after_successful: true`.
-- Keep polling intervals reasonable to avoid session invalidation or rate limits.

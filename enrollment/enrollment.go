@@ -2,6 +2,7 @@ package enrollment
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -21,6 +22,8 @@ const (
 
 	RateLimitIndicator = "注销"
 )
+
+var ErrSessionExpired = errors.New("session expired")
 
 type CourseType string
 
@@ -122,8 +125,8 @@ func SearchCourses(client *httpclient.Client, courseType CourseType, options Sea
 	if err != nil {
 		return nil, fmt.Errorf("search courses: %w", err)
 	}
-	if strings.Contains(body, RateLimitIndicator) {
-		return nil, fmt.Errorf("search courses rejected: session appears logged out or rate limited")
+	if IsSessionExpiredResponse(body) {
+		return nil, ErrSessionExpired
 	}
 
 	var resp searchResponse
@@ -158,8 +161,17 @@ func EnrollCourse(client *httpclient.Client, courseType CourseType, lessonID str
 	if err != nil {
 		return false, fmt.Errorf("enroll course: %w", err)
 	}
+	if IsSessionExpiredResponse(body) {
+		return false, ErrSessionExpired
+	}
 
 	return ParseEnrollResult(body), nil
+}
+
+func IsSessionExpiredResponse(body string) bool {
+	normalized := strings.TrimSpace(strings.ToLower(body))
+	return normalized == "undefined" ||
+		strings.Contains(body, RateLimitIndicator)
 }
 
 func ParseEnrollResult(body string) bool {

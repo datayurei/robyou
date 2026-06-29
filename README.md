@@ -47,6 +47,7 @@ This file is ignored by git.
 ```json
 {
   "interval_seconds": 3,
+  "login_check_rounds": 50,
   "courses": [
     {
       "name": "高等数学",
@@ -72,6 +73,7 @@ This file is ignored by git.
 Fields:
 
 - `interval_seconds`: delay between polling rounds.
+- `login_check_rounds`: run a login-status check every N rounds. Missing defaults to `50`; set to `0` or a negative number to disable periodic checks.
 - `courses`: list of course targets to poll.
 - `name`: local display name for logs.
 - `type`: `inplan` for planned courses, `public` for public electives.

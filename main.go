@@ -27,8 +27,9 @@ type secretConfig struct {
 }
 
 type enrollConfig struct {
-	IntervalSeconds float64        `json:"interval_seconds"`
-	Courses         []courseTarget `json:"courses"`
+	IntervalSeconds  float64        `json:"interval_seconds"`
+	LoginCheckRounds *int           `json:"login_check_rounds"`
+	Courses          []courseTarget `json:"courses"`
 }
 
 type courseTarget struct {
@@ -78,7 +79,7 @@ func main() {
 
 	xkURL, ok := getXklc(globalClient)
 	if ok {
-		fmt.Println("Login success with cached cookies")
+		fmt.Println("Login success using cookies")
 	} else {
 		info, err := loadLoginInfo("secret.json")
 		if err != nil {
@@ -100,7 +101,7 @@ func main() {
 		if err := globalClient.SaveCookies("cookies.json", cookieCacheURLs); err != nil {
 			fmt.Println("save cookies:", err)
 		}
-		fmt.Println("Login success")
+		fmt.Println("Login success using password")
 	}
 	// shareCookiesAcrossSubdomains(globalClient)
 
@@ -197,8 +198,14 @@ func runEnrollmentLoop(client *httpclient.Client, config enrollConfig) {
 	defer signal.Stop(stop)
 
 	interval := durationSeconds(config.IntervalSeconds, 3*time.Second)
+	loginCheckRounds := effectiveLoginCheckRounds(config)
 	completedTargets := make(map[int]bool)
 	fmt.Printf("start polling %d course target(s), interval: %s\n", len(config.Courses), interval)
+	if loginCheckRounds > 0 {
+		fmt.Printf("login status check: every %d round(s)\n", loginCheckRounds)
+	} else {
+		fmt.Println("login status check: disabled")
+	}
 
 	round := 1
 	for {
@@ -210,6 +217,15 @@ func runEnrollmentLoop(client *httpclient.Client, config enrollConfig) {
 		}
 
 		fmt.Printf("round %d\n", round)
+		if loginCheckRounds > 0 && round%loginCheckRounds == 0 {
+			fmt.Println("checking login status...")
+			if !parser.CheckLoginStatus(client) {
+				fmt.Println("session expired: periodic login check failed, please restart to login again")
+				return
+			}
+			fmt.Println("login status ok")
+		}
+
 		for targetIndex, target := range config.Courses {
 			select {
 			case <-stop:
@@ -239,6 +255,10 @@ func runEnrollmentLoop(client *httpclient.Client, config enrollConfig) {
 				Filters: target.Filters,
 			})
 			if err != nil {
+				if errors.Is(err, enrollment.ErrSessionExpired) {
+					fmt.Println("session expired: login is no longer valid, please restart to login again")
+					return
+				}
 				fmt.Println("search failed:", err)
 				continue
 			}
@@ -268,6 +288,10 @@ func runEnrollmentLoop(client *httpclient.Client, config enrollConfig) {
 				fmt.Println("try:", courseInfo)
 				ok, err := enrollment.EnrollCourse(client, courseType, course.LessonID, course.EnrollID)
 				if err != nil {
+					if errors.Is(err, enrollment.ErrSessionExpired) {
+						fmt.Println("session expired: enrollment returned undefined, please restart to login again")
+						return
+					}
 					fmt.Println("enroll failed:", err)
 				} else if ok {
 					fmt.Println("enroll success:", courseInfo)
@@ -369,7 +393,6 @@ func loadEnrollConfig(path string) (enrollConfig, error) {
 	if config.IntervalSeconds <= 0 {
 		config.IntervalSeconds = 3
 	}
-
 	enabledCount := 0
 	for i, target := range config.Courses {
 		if _, err := parseCourseType(target.Type); err != nil {
@@ -462,7 +485,8 @@ func defaultSecretConfig() secretConfig {
 
 func defaultEnrollConfig() enrollConfig {
 	return enrollConfig{
-		IntervalSeconds: 3,
+		IntervalSeconds:  3,
+		LoginCheckRounds: intPtr(50),
 		Courses: []courseTarget{
 			{
 				Name:                    "示例计划内课程",
@@ -484,4 +508,15 @@ func defaultEnrollConfig() enrollConfig {
 			},
 		},
 	}
+}
+
+func effectiveLoginCheckRounds(config enrollConfig) int {
+	if config.LoginCheckRounds == nil {
+		return 50
+	}
+	return *config.LoginCheckRounds
+}
+
+func intPtr(value int) *int {
+	return &value
 }

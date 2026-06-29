@@ -1,10 +1,13 @@
 package httpclient
 
 import (
+	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
@@ -12,6 +15,14 @@ import (
 type Client struct {
 	*http.Client
 	headers http.Header
+}
+
+type cachedCookie struct {
+	URL     string `json:"url"`
+	Name    string `json:"name"`
+	Value   string `json:"value"`
+	Path    string `json:"path,omitempty"`
+	Expires string `json:"expires,omitempty"`
 }
 
 func New() *Client {
@@ -102,6 +113,75 @@ func (c *Client) PostFormStringWithParams(rawURL string, params url.Values, data
 
 	return str, nil
 
+}
+
+func (c *Client) LoadCookies(path string, rawURLs []string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	var cached []cachedCookie
+	if err := json.Unmarshal(data, &cached); err != nil {
+		return err
+	}
+
+	for _, item := range cached {
+		rawURL := item.URL
+		if rawURL == "" {
+			continue
+		}
+		parsedURL, err := url.Parse(rawURL)
+		if err != nil {
+			continue
+		}
+		cookie := &http.Cookie{
+			Name:  item.Name,
+			Value: item.Value,
+			Path:  item.Path,
+		}
+		if item.Expires != "" {
+			if expires, err := time.Parse(time.RFC3339, item.Expires); err == nil {
+				cookie.Expires = expires
+			}
+		}
+		c.Client.Jar.SetCookies(parsedURL, []*http.Cookie{cookie})
+	}
+
+	return nil
+}
+
+func (c *Client) SaveCookies(path string, rawURLs []string) error {
+	var cached []cachedCookie
+	for _, rawURL := range rawURLs {
+		parsedURL, err := url.Parse(rawURL)
+		if err != nil {
+			return err
+		}
+		for _, cookie := range c.Client.Jar.Cookies(parsedURL) {
+			item := cachedCookie{
+				URL:   rawURL,
+				Name:  cookie.Name,
+				Value: cookie.Value,
+				Path:  cookie.Path,
+			}
+			if !cookie.Expires.IsZero() {
+				item.Expires = cookie.Expires.Format(time.RFC3339)
+			}
+			cached = append(cached, item)
+		}
+	}
+
+	data, err := json.MarshalIndent(cached, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+
+	return os.WriteFile(path, data, 0600)
 }
 
 func (c *Client) applyHeaders(req *http.Request) {

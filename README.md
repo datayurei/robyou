@@ -63,6 +63,7 @@ This file is ignored by git.
       "type": "public",
       "keyword": "心理",
       "enabled": true,
+      "public_category": 1,
       "request_delay_seconds": 0.5
     }
   ]
@@ -78,6 +79,7 @@ Fields:
 - `type`: `inplan` for planned courses, `public` for public electives.
 - `keyword`: course search keyword.
 - `enabled`: whether this target is active.
+- `public_category`: optional public-course category number. Omit it to search all public categories; set `1` to restrict to the first category shown by the school UI, such as `体育课`.
 - `filters`: optional raw search filters sent to the school system.
 - `fuzzy_filter_keywords`: skip courses where the course name or teacher contains any keyword.
 - `exact_filter_keywords`: skip courses where the course name or teacher exactly equals any keyword.
@@ -112,6 +114,7 @@ go run ./cmd/public_search_probe -keyword 心理
 Useful flags:
 
 - `-secret`: credential file path, defaults to `secret.json`
+- `-public-category`: optional public-course category number for `szjylb`
 - `-raw`: print the full raw response body
 - `-print-curl`: print a replayable `curl` command with the live cookie header
 

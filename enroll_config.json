@@ -1,0 +1,27 @@
+{
+  "interval_seconds": 3,
+  "login_check_rounds": 50,
+  "courses": [
+    {
+      "name": "示例计划内课程",
+      "type": "inplan",
+      "keyword": "网络",
+      "enabled": false,
+      "fuzzy_filter_keywords": [
+        "不想要的教师或课程片段"
+      ],
+      "exact_filter_keywords": [
+        "精确排除的教师或课程名"
+      ],
+      "request_delay_seconds": 2
+    },
+    {
+      "name": "生命",
+      "type": "public",
+      "keyword": "乐理",
+      "enabled": true,
+      "public_category": 0,
+      "request_delay_seconds": 2
+    }
+  ]
+}

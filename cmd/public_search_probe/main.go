@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/datayurei/robyou/enrollment"
@@ -31,11 +32,13 @@ type secretConfig struct {
 func main() {
 	var keyword string
 	var secretPath string
+	var publicCategory int
 	var printCurl bool
 	var raw bool
 
 	flag.StringVar(&keyword, "keyword", "", "public course search keyword")
 	flag.StringVar(&secretPath, "secret", "secret.json", "credential file path")
+	flag.IntVar(&publicCategory, "public-category", -1, "public course category number; negative means unset")
 	flag.BoolVar(&printCurl, "print-curl", false, "print a replayable curl command with live cookies")
 	flag.BoolVar(&raw, "raw", false, "print the full raw response body")
 	flag.Parse()
@@ -63,7 +66,7 @@ func main() {
 	}
 	fmt.Println("enrollment session initialized")
 
-	query := buildPublicSearchQuery(keyword)
+	query := buildPublicSearchQuery(keyword, optionalInt(publicCategory))
 	form := buildDataTablePayload()
 
 	requestURL, err := withQuery(enrollment.BaseURL+enrollment.EndpointPublicSearch, query)
@@ -107,8 +110,8 @@ func main() {
 	printResponseSummary(respBody)
 }
 
-func buildPublicSearchQuery(keyword string) url.Values {
-	return url.Values{
+func buildPublicSearchQuery(keyword string, publicCategory *int) url.Values {
+	query := url.Values{
 		"kcxx":   {keyword},
 		"skls":   {""},
 		"skxq":   {""},
@@ -122,6 +125,12 @@ func buildPublicSearchQuery(keyword string) url.Values {
 		"kcxz":   {""},
 		"szjylb": {""},
 	}
+
+	if publicCategory != nil {
+		query.Set("szjylb", strconv.Itoa(*publicCategory))
+	}
+
+	return query
 }
 
 func loginWithSecret(client *httpclient.Client, secretPath string) error {
@@ -316,6 +325,13 @@ func loadSecret(path string) (secretConfig, error) {
 	}
 
 	return secret, nil
+}
+
+func optionalInt(value int) *int {
+	if value < 0 {
+		return nil
+	}
+	return &value
 }
 
 func truncate(value string, limit int) string {

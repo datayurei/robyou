@@ -37,6 +37,7 @@ type courseTarget struct {
 	Type                string            `json:"type"`
 	Keyword             string            `json:"keyword"`
 	Enabled             bool              `json:"enabled"`
+	PublicCategory      *int              `json:"public_category,omitempty"`
 	Filters             map[string]string `json:"filters,omitempty"`
 	FuzzyFilterKeywords []string          `json:"fuzzy_filter_keywords,omitempty"`
 	ExactFilterKeywords []string          `json:"exact_filter_keywords,omitempty"`
@@ -243,8 +244,9 @@ func runEnrollmentLoop(client *httpclient.Client, config enrollConfig) {
 			fmt.Printf("search target: %s [%s] keyword=%q\n", label, courseType, target.Keyword)
 
 			courses, err := enrollment.SearchCourses(client, courseType, enrollment.SearchOptions{
-				Keyword: target.Keyword,
-				Filters: target.Filters,
+				Keyword:        target.Keyword,
+				Filters:        target.Filters,
+				PublicCategory: target.PublicCategory,
 			})
 			if err != nil {
 				if errors.Is(err, enrollment.ErrSessionExpired) {
@@ -395,6 +397,9 @@ func loadEnrollConfig(path string) (enrollConfig, error) {
 		if _, err := parseCourseType(target.Type); err != nil {
 			return enrollConfig{}, fmt.Errorf("courses[%d]: %w", i, err)
 		}
+		if target.PublicCategory != nil && *target.PublicCategory < 0 {
+			return enrollConfig{}, fmt.Errorf("courses[%d]: public_category must be >= 0", i)
+		}
 		if target.Enabled {
 			enabledCount++
 		}
@@ -500,6 +505,7 @@ func defaultEnrollConfig() enrollConfig {
 				Type:                    "public",
 				Keyword:                 "公选课关键词",
 				Enabled:                 false,
+				PublicCategory:          intPtr(1),
 				RequestDelaySeconds:     0.5,
 				ContinueAfterSuccessful: false,
 			},

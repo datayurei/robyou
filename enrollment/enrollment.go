@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/datayurei/robyou/httpclient"
@@ -77,8 +78,9 @@ func (c *Course) UnmarshalJSON(data []byte) error {
 }
 
 type SearchOptions struct {
-	Keyword string
-	Filters map[string]string
+	Keyword        string
+	Filters        map[string]string
+	PublicCategory *int
 }
 
 type searchResponse struct {
@@ -120,7 +122,7 @@ func SearchCourses(client *httpclient.Client, courseType CourseType, options Sea
 
 	body, err := client.PostFormStringWithParams(
 		BaseURL+endpoint,
-		buildSearchParams(courseType, options.Keyword, options.Filters),
+		buildSearchParams(courseType, options.Keyword, options.Filters, options.PublicCategory),
 		buildDataTablePayload(),
 	)
 	if err != nil {
@@ -222,7 +224,7 @@ func rawString(raw json.RawMessage) string {
 	return string(raw)
 }
 
-func buildSearchParams(courseType CourseType, keyword string, filters map[string]string) url.Values {
+func buildSearchParams(courseType CourseType, keyword string, filters map[string]string, publicCategory *int) url.Values {
 	params := url.Values{
 		"kcxx":  {keyword},
 		"skls":  {""},
@@ -241,6 +243,9 @@ func buildSearchParams(courseType CourseType, keyword string, filters map[string
 		params.Set("sfym", "true")
 		params.Set("szjylb", "")
 		params.Set("kcxz", "")
+		if publicCategory != nil {
+			params.Set("szjylb", strconv.Itoa(*publicCategory))
+		}
 	}
 
 	for key, value := range filters {

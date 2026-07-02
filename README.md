@@ -101,6 +101,22 @@ go build -o robyou .
 
 Stop polling with `Ctrl+C`.
 
+## Manual Public Search Probe
+
+To test the public-elective search API with a fresh password login and a hand-built request:
+
+```bash
+go run ./cmd/public_search_probe -keyword 心理
+```
+
+Useful flags:
+
+- `-secret`: credential file path, defaults to `secret.json`
+- `-raw`: print the full raw response body
+- `-print-curl`: print a replayable `curl` command with the live cookie header
+
+This command always logs in with `secret.json`, initializes the enrollment context, then sends a manual `POST` request to `/jsxsd/xsxkkc/xsxkGgxxkxk`.
+
 ## Build Artifacts
 
 GitHub Actions builds binaries for:

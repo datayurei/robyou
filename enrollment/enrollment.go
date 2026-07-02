@@ -13,12 +13,13 @@ import (
 const (
 	BaseURL = "https://jw.stu.edu.cn"
 
-	EndpointEnrollmentInit = "/jsxsd/xsxk/newXsxkzx"
-	EndpointSelectBottom   = "/jsxsd/xsxk/selectBottom"
-	EndpointInPlanSearch   = "/jsxsd/xsxkkc/xsxkBxqjhxk"
-	EndpointPublicSearch   = "/jsxsd/xsxkkc/xsxkGgxxkxk"
-	EndpointInPlanEnroll   = "/jsxsd/xsxkkc/bxqjhxkOper"
-	EndpointPublicEnroll   = "/jsxsd/xsxkkc/ggxxkxkOper"
+	EndpointEnrollmentSession = "/jsxsd/xsxk/xklc_list?Ves632DSdyV=NEW_XSD_PYGL"
+	EndpointEnrollmentInit    = "/jsxsd/xsxk/newXsxkzx"
+	EndpointSelectBottom      = "/jsxsd/xsxk/selectBottom"
+	EndpointInPlanSearch      = "/jsxsd/xsxkkc/xsxkBxqjhxk"
+	EndpointPublicSearch      = "/jsxsd/xsxkkc/xsxkGgxxkxk"
+	EndpointInPlanEnroll      = "/jsxsd/xsxkkc/bxqjhxkOper"
+	EndpointPublicEnroll      = "/jsxsd/xsxkkc/ggxxkxkOper"
 
 	RateLimitIndicator = "注销"
 )

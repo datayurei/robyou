@@ -238,7 +238,8 @@ func buildSearchParams(courseType CourseType, keyword string, filters map[string
 	}
 
 	if courseType == CourseTypePublic {
-		params.Set("szjylb", "1")
+		params.Set("sfym", "true")
+		params.Set("szjylb", "")
 		params.Set("kcxz", "")
 	}
 

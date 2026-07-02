@@ -125,7 +125,11 @@ func login(client *httpclient.Client, info loginInfo) (bool, error) {
 
 	html, _ := client.GetString(loginURL)
 
-	lt, _ := parser.ExtractLtFromLogin(html)
+	lt, exist := parser.ExtractLtFromLogin(html)
+
+	if exist != true {
+		return false, fmt.Errorf("lt parsing falied")
+	}
 
 	loginData := url.Values{
 		"username":  {info.username},
@@ -141,6 +145,7 @@ func login(client *httpclient.Client, info loginInfo) (bool, error) {
 	if !isLogin {
 		return false, fmt.Errorf("auth failed, check your account and password")
 	}
+	fmt.Println("Login success")
 
 	return true, nil
 

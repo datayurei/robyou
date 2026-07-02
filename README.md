@@ -6,7 +6,6 @@ STU course enrollment helper written in Go. It logs in to `jw.stu.edu.cn`, initi
 
 - Reads credentials from local `secret.json`.
 - Reads enrollment targets from local `enroll_config.json`.
-- Reuses cached cookies from `cookies.json` and only logs in again when the cached session is invalid.
 - Supports multiple course targets in one polling loop.
 - Supports planned courses (`inplan`) and public electives (`public`).
 - Builds cross-platform binaries with GitHub Actions.
@@ -101,19 +100,6 @@ go build -o robyou .
 ```
 
 Stop polling with `Ctrl+C`.
-
-## Cookie Cache
-
-The program stores reusable login cookies in `cookies.json`. On startup it tries cached cookies first. If they are invalid, it falls back to `secret.json` login and writes a fresh cache.
-
-To force a fresh login:
-
-```bash
-rm cookies.json
-go run .
-```
-
-`cookies.json` is ignored by git.
 
 ## Build Artifacts
 

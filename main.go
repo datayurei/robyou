@@ -49,10 +49,10 @@ type courseTarget struct {
 // build a global http client
 var globalClient *httpclient.Client
 
-var cookieCacheURLs = []string{
-	"https://sso.stu.edu.cn/",
-	"https://jw.stu.edu.cn/",
-}
+// var cookieCacheURLs = []string{
+// 	"https://sso.stu.edu.cn/",
+// 	"https://jw.stu.edu.cn/",
+// }
 
 func main() {
 	globalClient = httpclient.New()
@@ -73,35 +73,22 @@ func main() {
 		return
 	}
 
-	if err := globalClient.LoadCookies("cookies.json", cookieCacheURLs); err != nil {
-		fmt.Println("load cookies:", err)
+	info, err := loadLoginInfo("secret.json")
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
+
+	// Always login with username and password on startup.
+	if _, err := login(globalClient, info); err != nil {
+		fmt.Println(err)
+		return
 	}
 
 	xkURL, ok := getXklc(globalClient)
-	if ok {
-		fmt.Println("Login success using cookies")
-	} else {
-		info, err := loadLoginInfo("secret.json")
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		// login with account and passwrod
-		if _, err := login(globalClient, info); err != nil {
-			fmt.Println(err)
-			return
-		}
-
-		xkURL, ok = getXklc(globalClient)
-		if !ok {
-			fmt.Println("failed to find course selection link")
-			return
-		}
-		if err := globalClient.SaveCookies("cookies.json", cookieCacheURLs); err != nil {
-			fmt.Println("save cookies:", err)
-		}
-		fmt.Println("Login success using password")
+	if !ok {
+		fmt.Println("failed to find course selection link")
+		return
 	}
 	// shareCookiesAcrossSubdomains(globalClient)
 

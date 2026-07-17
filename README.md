@@ -16,6 +16,7 @@ STU course enrollment helper written in Go. It logs in to `jw.stu.edu.cn`, initi
 - [ ] 参数化课程搜索的过滤选项
 - [ ] 实现cookie复用
 - [ ] 支持选保底课后反复搜索，退课后选课实现换成优先级更高的课的逻辑
+- [ ] 更友好的课程配置
 
 ps: 我快不用选课了，大概率后面不会在更了，有人看到想做的话自己fork一份
 

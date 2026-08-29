@@ -22,14 +22,25 @@ var ErrAlreadyRunning = errors.New("任务已在运行中 (a run is already in p
 var ErrNotLoggedIn = errors.New("尚未登录 (not logged in)")
 
 const (
-	// bootstrapRetryInterval is how long to wait before looking for the
-	// course-selection round again when none is open yet.
-	bootstrapRetryInterval = 15 * time.Second
-
 	// reloginCooldown suppresses duplicate re-logins when several jobs hit
 	// an expired session at the same time.
 	reloginCooldown = 30 * time.Second
+
+	// roundWaitLogEvery keeps the "still waiting" chatter down: while
+	// enrollment has not opened, only every Nth check is logged at info
+	// level, the rest at debug.
+	roundWaitLogEvery = 10
 )
+
+// ConnectResult reports what Connect achieved. A login can succeed while
+// enrollment has not opened yet, which is a normal state rather than an error,
+// so the two outcomes are reported separately.
+type ConnectResult struct {
+	LoggedIn  bool   `json:"logged_in"`
+	RoundOpen bool   `json:"round_open"`
+	Xkid      string `json:"xkid"`
+	Message   string `json:"message"`
+}
 
 // Engine owns the session and runs jobs against it.
 type Engine struct {
@@ -100,9 +111,10 @@ func (e *Engine) LoggedIn() bool {
 }
 
 // Connect logs in and, when a round is open, initializes the enrollment
-// workspace. A missing round is reported as an error but leaves the session
-// logged in, so Start can keep retrying for the round to open.
-func (e *Engine) Connect(ctx context.Context, creds config.Credentials) error {
+// workspace. An error is returned only when the login itself failed: a
+// successful login with no open round is a normal outcome, reported through
+// ConnectResult, and Start will wait for the round to appear.
+func (e *Engine) Connect(ctx context.Context, creds config.Credentials) (ConnectResult, error) {
 	log := e.logger("", "")
 
 	e.mu.Lock()
@@ -117,7 +129,7 @@ func (e *Engine) Connect(ctx context.Context, creds config.Credentials) error {
 		e.setLoggedIn(false)
 		e.status.setPhase(PhaseError, err.Error())
 		log.Errorf("登录失败: %v", err)
-		return err
+		return ConnectResult{Message: err.Error()}, err
 	}
 
 	e.setLoggedIn(true)
@@ -125,16 +137,20 @@ func (e *Engine) Connect(ctx context.Context, creds config.Credentials) error {
 
 	xkid, err := e.session.Bootstrap(ctx)
 	if err != nil {
-		e.status.setPhase(PhaseReady, err.Error())
-		log.Warnf("选课入口不可用: %v", err)
-		return err
+		message := "选课尚未开放，开始运行后会自动等待并重试"
+		if !errors.Is(err, ErrRoundNotOpen) {
+			message = fmt.Sprintf("选课入口暂不可用: %v", err)
+		}
+		e.status.setPhase(PhaseWaiting, message)
+		log.Warnf("%s (%v)", message, err)
+		return ConnectResult{LoggedIn: true, Message: message}, nil
 	}
 
 	e.status.update(func(status *Status) { status.Xkid = xkid })
 	e.status.setPhase(PhaseReady, "已进入选课界面")
 	log.Successf("已进入选课轮次 xkid=%s", xkid)
 
-	return nil
+	return ConnectResult{LoggedIn: true, RoundOpen: true, Xkid: xkid, Message: "已进入选课界面"}, nil
 }
 
 // Start launches the configured jobs. It returns as soon as the run has been
@@ -230,7 +246,7 @@ func (e *Engine) run(ctx context.Context, cfg config.Config) {
 		e.finish(ctx, "登录会话不可用")
 		return
 	}
-	if !e.ensureRound(ctx, log) {
+	if !e.ensureRound(ctx, log, durationSeconds(cfg.RoundRetrySeconds, config.DefaultRoundRetrySeconds*time.Second)) {
 		e.finish(ctx, "未能进入选课轮次")
 		return
 	}
@@ -490,9 +506,15 @@ func (e *Engine) ensureSession(ctx context.Context, log *logbus.Logger) bool {
 	return true
 }
 
-// ensureRound waits for a course-selection round to become available. Rounds
-// often open on a schedule, so this retries instead of giving up.
-func (e *Engine) ensureRound(ctx context.Context, log *logbus.Logger) bool {
+// ensureRound waits for a course-selection round to become available.
+//
+// Before enrollment opens, the portal carries no xklc_list link at all, so
+// there is no xkid to work with and every job would fail immediately. Rounds
+// open on a published schedule, so the engine parks here instead: it rechecks
+// every retry interval, keeps the session alive across the wait, and holds the
+// jobs in StateWaiting so the GUI shows what is being waited for rather than a
+// silent idle screen.
+func (e *Engine) ensureRound(ctx context.Context, log *logbus.Logger, retry time.Duration) bool {
 	if e.session.Xkid() != "" {
 		return true
 	}
@@ -504,19 +526,90 @@ func (e *Engine) ensureRound(ctx context.Context, log *logbus.Logger) bool {
 
 		xkid, err := e.session.Bootstrap(ctx)
 		if err == nil {
-			e.status.update(func(status *Status) { status.Xkid = xkid })
-			log.Successf("已进入选课轮次 xkid=%s", xkid)
+			e.clearRoundWait(xkid)
+			if attempt == 1 {
+				log.Successf("已进入选课轮次 xkid=%s", xkid)
+			} else {
+				log.Successf("选课已开放，已进入轮次 xkid=%s (等待了 %d 次检查)", xkid, attempt-1)
+			}
 			return true
 		}
 		if ctx.Err() != nil {
 			return false
 		}
 
-		log.Warnf("第 %d 次获取选课入口失败: %v，%s 后重试", attempt, err, bootstrapRetryInterval)
-		if !sleepCtx(ctx, bootstrapRetryInterval) {
+		switch {
+		case errors.Is(err, ErrRoundNotOpen):
+			// The expected state before enrollment starts.
+			if attempt == 1 {
+				log.Warnf("选课尚未开放，将每 %s 检查一次，直到选课开始", retry)
+			} else if attempt%roundWaitLogEvery == 0 {
+				log.Infof("仍在等待选课开放，已检查 %d 次", attempt)
+			} else {
+				log.Debugf("第 %d 次检查: 选课仍未开放", attempt)
+			}
+
+		case errors.Is(err, enrollment.ErrSessionExpired):
+			log.Warnf("等待期间登录已失效，正在重新登录")
+			if recoverErr := e.recoverSession(ctx, log); recoverErr != nil {
+				log.Errorf("重新登录失败，停止等待: %v", recoverErr)
+				return false
+			}
+
+		default:
+			log.Errorf("第 %d 次获取选课入口出错: %v", attempt, err)
+		}
+
+		e.markRoundWait(attempt, retry, err)
+		if !sleepCtx(ctx, retry) {
 			return false
 		}
 	}
+}
+
+// markRoundWait records that enrollment has not opened yet, so both the phase
+// pill and every pending job show the wait instead of looking stalled.
+func (e *Engine) markRoundWait(attempt int, retry time.Duration, cause error) {
+	next := time.Now().Add(retry)
+
+	e.status.update(func(status *Status) {
+		status.Phase = PhaseWaiting
+		status.Message = fmt.Sprintf("等待选课开放，已检查 %d 次", attempt)
+		status.WaitingForRound = true
+		status.RoundAttempts = attempt
+		status.NextRoundCheckAt = &next
+	})
+
+	message := fmt.Sprintf("等待选课开放 (第 %d 次检查)", attempt)
+	if !errors.Is(cause, ErrRoundNotOpen) && cause != nil {
+		message = fmt.Sprintf("等待选课入口恢复 (第 %d 次检查): %v", attempt, cause)
+	}
+
+	e.status.updateAllJobs(func(status *JobStatus) {
+		if status.State == StatePending || status.State == StateWaiting {
+			status.State = StateWaiting
+			status.Message = message
+		}
+	})
+}
+
+// clearRoundWait releases the jobs held by markRoundWait once the round is up.
+func (e *Engine) clearRoundWait(xkid string) {
+	e.status.update(func(status *Status) {
+		status.Xkid = xkid
+		status.WaitingForRound = false
+		status.RoundAttempts = 0
+		status.NextRoundCheckAt = nil
+		status.Phase = PhaseRunning
+		status.Message = "运行中"
+	})
+
+	e.status.updateAllJobs(func(status *JobStatus) {
+		if status.State == StateWaiting {
+			status.State = StatePending
+			status.Message = ""
+		}
+	})
 }
 
 // startLoginWatchdog periodically verifies the session and stops the run when
@@ -584,6 +677,13 @@ func (e *Engine) recoverSession(ctx context.Context, log *logbus.Logger) error {
 
 	xkid, err := e.session.Bootstrap(ctx)
 	if err != nil {
+		if errors.Is(err, ErrRoundNotOpen) {
+			// The login is healthy again; enrollment simply has not opened
+			// yet, which the caller's wait loop already handles.
+			e.lastRelogin = time.Now()
+			log.Warnf("已重新登录，但选课尚未开放")
+			return nil
+		}
 		return fmt.Errorf("重新进入选课界面失败 (re-enter enrollment): %w", err)
 	}
 

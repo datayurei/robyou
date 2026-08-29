@@ -4,6 +4,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -18,15 +19,30 @@ const (
 	portalURL   = "https://jw.stu.edu.cn/jsxsd/framework/xsrkxz.htmlx"
 )
 
+// ErrRoundNotOpen means the login worked but no course-selection round is
+// available yet: the portal carries no xklc_list link, or that list is empty.
+// This is the normal state before enrollment opens, so callers wait and retry
+// rather than treating it as a failure.
+var ErrRoundNotOpen = errors.New("选课尚未开放 (no course-selection round is open)")
+
 // Session is one authenticated connection to the teaching-management system.
 type Session struct {
 	client *httpclient.Client
 	xkid   string
+
+	// Endpoints are fields rather than constants so tests can point the
+	// bootstrap walk at a stub server.
+	portalURL string
+	baseURL   string
 }
 
 // NewSession wraps a client that has not logged in yet.
 func NewSession(client *httpclient.Client) *Session {
-	return &Session{client: client}
+	return &Session{
+		client:    client,
+		portalURL: portalURL,
+		baseURL:   parser.JWBaseURL,
+	}
 }
 
 // Client exposes the underlying HTTP client.
@@ -79,25 +95,36 @@ func (s *Session) Alive(ctx context.Context) bool {
 
 // Bootstrap walks the portal to the active round and initializes the
 // enrollment workspace, which the search and enroll endpoints require.
+//
+// Failures are classified, because they mean very different things: an empty
+// or missing round list is ErrRoundNotOpen (wait for enrollment to start),
+// being served the login form is enrollment.ErrSessionExpired (log in again),
+// and anything else is a transport or server problem.
 func (s *Session) Bootstrap(ctx context.Context) (string, error) {
-	portal, err := s.client.Get(ctx, portalURL)
+	portal, err := s.client.Get(ctx, s.portalURL)
 	if err != nil {
 		return "", fmt.Errorf("打开教务首页失败 (open portal): %w", err)
 	}
+	if parser.IsLoginPage(portal) {
+		return "", fmt.Errorf("打开教务首页时被跳转到登录页: %w", enrollment.ErrSessionExpired)
+	}
 
-	roundURL, ok := parser.ExtractXklc(portal)
+	roundURL, ok := parser.ExtractXklcWithBase(portal, s.baseURL)
 	if !ok {
-		return "", fmt.Errorf("未找到选课入口，可能当前没有开放的选课轮次 (no course-selection round link found)")
+		return "", fmt.Errorf("%w: 教务首页没有选课入口链接 (no xklc_list link on the portal)", ErrRoundNotOpen)
 	}
 
 	roundPage, err := s.client.Get(ctx, roundURL)
 	if err != nil {
-		return "", fmt.Errorf("打开选课轮次失败 (open course-selection round): %w", err)
+		return "", fmt.Errorf("打开选课轮次列表失败 (open xklc_list): %w", err)
+	}
+	if parser.IsLoginPage(roundPage) {
+		return "", fmt.Errorf("打开选课轮次列表时被跳转到登录页: %w", enrollment.ErrSessionExpired)
 	}
 
 	xkid, ok := parser.ExtractXkid(roundPage)
 	if !ok {
-		return "", fmt.Errorf("选课轮次页面中未找到 xkid (xkid not found)")
+		return "", fmt.Errorf("%w: 选课轮次列表中没有可选的轮次 (xklc_list has no round)", ErrRoundNotOpen)
 	}
 
 	if err := enrollment.InitializeSession(ctx, s.client, xkid); err != nil {

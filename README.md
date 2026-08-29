@@ -17,7 +17,10 @@ required), plus a headless CLI that runs the same engine.
   bounded no matter how many jobs run. Default and recommended: 1 rps.
 - Live log pane with level filters, keyword search and export.
 - Automatic re-login and re-entry into the enrollment round when the session expires.
-- Keeps retrying for the course-selection entry when no round is open yet.
+- **Waits for enrollment to open.** Before the round starts the school portal has no
+  course-selection entry at all, so the engine parks, rechecks on an interval, keeps
+  the session alive across the wait, and shows every job as `等待开放` until the round
+  appears — then starts polling immediately.
 - Supports planned courses (`inplan`) and public electives (`public`).
 
 ## Running the GUI
@@ -83,6 +86,7 @@ The GUI shows the resolved path under **全局设置**.
   "version": 2,
   "requests_per_second": 1,
   "login_check_seconds": 180,
+  "round_retry_seconds": 30,
   "mode": "sequence",
   "jobs": [
     {
@@ -131,6 +135,10 @@ Top-level fields:
   `1` is the default and the recommended value; higher values are honoured but flagged
   in the log and in the GUI, and `0` disables pacing entirely.
 - `login_check_seconds`: how often to verify the SSO session. `0` disables the check.
+- `round_retry_seconds`: how often to check whether enrollment has opened while no
+  round is available. Cannot be disabled — without a round there is nothing to run —
+  so `0` or a missing value falls back to 30s. Leave it slow: the wait can last hours,
+  and the check costs two requests each time.
 - `mode`: `sequence` (one job at a time, in list order) or `concurrent` (all enabled
   jobs at once). Both modes share the same rate limiter, so the request rate is the
   same either way — only the ordering differs.
@@ -167,6 +175,22 @@ Target fields:
 A pre-jobs `enroll_config.json` (flat `courses` list, `login_check_rounds`) is
 migrated automatically on load: its courses become a single job, and the round
 count becomes the equivalent number of seconds.
+
+## Waiting for enrollment to open
+
+You can log in and press 开始选课 before the enrollment window starts. The engine
+walks the portal looking for the `xklc_list` entry; while it is missing it logs
+`选课尚未开放，将每 30s 检查一次`, marks the jobs `等待开放`, and shows the check count
+and next check time in 运行状态. When the round appears it enters it and the first
+polling round starts on the spot.
+
+Two things are handled during that wait, because it can be long:
+
+- A session that expires while waiting is detected (the portal starts returning the
+  CAS login form instead of a page) and re-established automatically.
+- The wait respects the request rate like everything else, so a long wait is cheap.
+
+The CLI behaves identically — a closed round is not a startup error.
 
 ## Manual Public Search Probe
 

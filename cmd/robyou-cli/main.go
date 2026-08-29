@@ -81,11 +81,10 @@ func run(jobsPath, credsPath string, rate float64, verbose bool) error {
 	defer stop()
 
 	runner := engine.New(bus, cfg.RequestsPerSecond)
-	if err := runner.Connect(ctx, creds); err != nil {
-		if !runner.LoggedIn() {
-			return err
-		}
-		// A missing round is not fatal: Start keeps retrying for it.
+	// A closed enrollment round is not an error here: Start parks in the wait
+	// loop until it opens.
+	if _, err := runner.Connect(ctx, creds); err != nil {
+		return err
 	}
 
 	if err := runner.Start(cfg); err != nil {

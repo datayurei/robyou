@@ -89,6 +89,16 @@ Returns the portal HTML. `parser.ExtractXklc` picks the first
 `a[href^="/jsxsd/xsxk/xklc_list"]` and resolves it against the base URL. The probe
 skips this and hits `EndpointEnrollmentSession` directly.
 
+**Before enrollment opens, this link is simply absent** — the portal renders without
+it, so there is no round list to fetch and no `xkid` to obtain. That is the normal
+state outside the scheduled enrollment window, not an error, and it is
+indistinguishable from any other reason for the link being missing. An unauthenticated
+request is different: CAS answers with its login form, which
+`parser.IsLoginPage` detects (an `input[name="lt"]`, or the `password` +
+`_eventId` field pair). `engine.Session.Bootstrap` uses that split to classify the
+three outcomes — `ErrRoundNotOpen`, `enrollment.ErrSessionExpired`, or a transport
+error — because each needs a different response: wait, re-login, or report.
+
 ### 2.3 Extract `xkid`
 
 ```
@@ -98,6 +108,9 @@ GET /jsxsd/xsxk/xklc_list?Ves632DSdyV=NEW_XSD_PYGL
 `parser.ExtractXkid` takes the **first** 32-character uppercase-hex match
 (`[A-F0-9]{32}`) in the body as the round ID. With several open rounds this picks
 whichever appears first in the HTML — there is no round-name matching.
+
+A round list that renders with no rounds in it yields no match, which is treated the
+same as a missing portal link: `ErrRoundNotOpen`, wait and retry.
 
 ### 2.4 Enter the enrollment workspace
 
@@ -266,6 +279,14 @@ failed recovery ends the run.
 A periodic liveness check (`login_check_seconds`, default 180s) runs the §2.1
 verification independently of the polling loop and triggers the same recovery path.
 
+`ErrRoundNotOpen` (§2.2) is handled separately, since nothing is wrong with the
+session: `engine.ensureRound` parks before the first polling round, rechecks every
+`round_retry_seconds` (default 30s), and holds every job in `waiting` state so the
+wait is visible instead of looking idle. The wait is unbounded — it ends when the
+round appears or the run is stopped. A session that expires *during* the wait is
+detected by the login-page check and recovered in place, so a client left running
+overnight is still logged in when enrollment opens.
+
 Other failures surface as wrapped errors (`search courses: …`, `enroll course: …`,
 `parse search response: …`) and are logged without stopping the loop.
 
@@ -276,7 +297,10 @@ Other failures surface as wrapped errors (`search courses: …`, `enroll course:
 ```
 POST sso login                                   (engine.Session.Login)
  └─ GET  /jsxsd/framework/xsrkxz.htmlx        → round list URL
+     │                                          ↑ no link yet → ErrRoundNotOpen:
+     │                                            wait round_retry_seconds, retry
      └─ GET  /jsxsd/xsxk/xklc_list?…          → xkid (32 hex)
+         │                                      ↑ no round in the list → same wait
          ├─ GET  /jsxsd/xsxk/newXsxkzx?jx0502zbid=xkid
          └─ GET  /jsxsd/xsxk/selectBottom?jx0502zbid=xkid&sfylxkstr=
              ├─ every login_check_seconds: GET sso /login → liveness check
@@ -297,6 +321,7 @@ Pacing is layered:
 | Control | Scope | Default |
 | --- | --- | --- |
 | `requests_per_second` | Every request in the process | 1.0 (`ratelimit.Recommended`); `0` disables pacing |
+| `round_retry_seconds` | Gap between checks for enrollment to open | 30s |
 | `interval_seconds` | Pause between polling rounds of one job | 3s |
 | `request_delay_seconds` | Extra pause between enroll attempts within a target | 0.5s |
 
@@ -313,7 +338,7 @@ above-recommended.
 | Cookie jar, headers, GET/POST helpers, pacing hook | `httpclient/client.go` |
 | Request pacing | `internal/ratelimit/ratelimit.go` |
 | Login, HTML scraping, login check | `parser/parser.go` |
-| Login and §2 bootstrap | `internal/engine/session.go` |
+| Login, §2 bootstrap, failure classification | `internal/engine/session.go` |
 | Job scheduling, polling loop, session recovery | `internal/engine/engine.go` |
 | Run status exposed to the GUI | `internal/engine/status.go` |
 | Job configuration and legacy migration | `internal/config/config.go` |

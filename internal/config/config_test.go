@@ -186,3 +186,43 @@ func TestCredentialsRoundTrip(t *testing.T) {
 		t.Fatal("credentials file should be gone")
 	}
 }
+
+func TestNormalizeRoundRetryAlwaysHasAnInterval(t *testing.T) {
+	tests := []struct {
+		name  string
+		value float64
+		want  float64
+	}{
+		{name: "missing", value: 0, want: DefaultRoundRetrySeconds},
+		{name: "negative", value: -10, want: DefaultRoundRetrySeconds},
+		{name: "custom", value: 120, want: 120},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Waiting for enrollment to open cannot be disabled: without a
+			// round there is nothing to run.
+			config := Config{RoundRetrySeconds: tt.value}
+			config.Normalize()
+
+			if config.RoundRetrySeconds != tt.want {
+				t.Fatalf("RoundRetrySeconds = %v, want %v", config.RoundRetrySeconds, tt.want)
+			}
+		})
+	}
+}
+
+func TestLegacyConfigGetsARoundRetryInterval(t *testing.T) {
+	path := filepath.Join(t.TempDir(), JobsFileName)
+	if err := os.WriteFile(path, []byte(legacyFile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	config, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.RoundRetrySeconds != DefaultRoundRetrySeconds {
+		t.Fatalf("RoundRetrySeconds = %v, want %v", config.RoundRetrySeconds, DefaultRoundRetrySeconds)
+	}
+}

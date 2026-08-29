@@ -192,8 +192,10 @@ func (a *App) ForgetCredentials() error {
 }
 
 // Login authenticates and enters the enrollment workspace. An empty password
-// reuses the stored one, so the GUI never has to hold it.
-func (a *App) Login(request LoginRequest) error {
+// reuses the stored one, so the GUI never has to hold it. A successful login
+// while enrollment is closed is not an error: the result reports the round as
+// unavailable and Start will wait for it to open.
+func (a *App) Login(request LoginRequest) (engine.ConnectResult, error) {
 	a.mu.Lock()
 	creds := config.Credentials{
 		Username: strings.TrimSpace(request.Username),
@@ -208,18 +210,16 @@ func (a *App) Login(request LoginRequest) error {
 	a.mu.Unlock()
 
 	if creds.Username == "" || creds.Password == "" {
-		return fmt.Errorf("请填写用户名和密码 (username and password are required)")
+		return engine.ConnectResult{}, fmt.Errorf("请填写用户名和密码 (username and password are required)")
 	}
 
-	if err := a.engine.Connect(a.ctx, creds); err != nil {
-		// Bootstrap failures still leave a usable login, so credentials are
-		// kept: Start will keep retrying for the round to open.
-		a.rememberCredentials(creds, request.Remember)
-		return err
+	result, err := a.engine.Connect(a.ctx, creds)
+	if err != nil {
+		return result, err
 	}
 
 	a.rememberCredentials(creds, request.Remember)
-	return nil
+	return result, nil
 }
 
 // Start runs the saved configuration.

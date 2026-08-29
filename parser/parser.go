@@ -22,7 +22,30 @@ func ExtractLtFromLogin(body string) (string, bool) {
 
 }
 
+// IsLoginPage reports whether body is the CAS login form rather than a page
+// from the teaching-management system. Landing here means the session is gone:
+// CAS serves this form to unauthenticated visitors, so a portal or round-list
+// request that returns it has to be told apart from one that simply found no
+// open enrollment round.
+func IsLoginPage(body string) bool {
+	if _, ok := ExtractLtFromLogin(body); ok {
+		return true
+	}
+	return strings.Contains(body, `name="_eventId"`) && strings.Contains(body, `name="password"`)
+}
+
+// JWBaseURL is the base the portal's relative links resolve against.
+const JWBaseURL = "https://jw.stu.edu.cn/"
+
+// ExtractXklc finds the course-selection round list link on the portal page.
+// Before enrollment opens the portal carries no such link, so a false result
+// is the normal "not open yet" signal rather than a parse failure.
 func ExtractXklc(body string) (string, bool) {
+	return ExtractXklcWithBase(body, JWBaseURL)
+}
+
+// ExtractXklcWithBase is ExtractXklc against an arbitrary base URL.
+func ExtractXklcWithBase(body string, base string) (string, bool) {
 	doc, err := goquery.NewDocumentFromReader(strings.NewReader(body))
 	if err != nil {
 		return "", false
@@ -36,7 +59,7 @@ func ExtractXklc(body string) (string, bool) {
 		return "", false
 	}
 
-	baseURL, err := url.Parse("https://jw.stu.edu.cn/")
+	baseURL, err := url.Parse(base)
 	if err != nil {
 		return "", false
 	}

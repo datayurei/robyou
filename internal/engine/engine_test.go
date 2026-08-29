@@ -2,12 +2,16 @@ package engine
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/datayurei/robyou/enrollment"
 	"github.com/datayurei/robyou/internal/config"
 	"github.com/datayurei/robyou/internal/logbus"
+	"github.com/datayurei/robyou/internal/ratelimit"
 )
 
 func TestIsFiltered(t *testing.T) {
@@ -185,5 +189,118 @@ func TestLoginWatchdogStopsWithItsContext(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("watchdog did not exit after its context was cancelled")
+	}
+}
+
+func TestMarkRoundWaitHoldsJobsInWaitingState(t *testing.T) {
+	runner := New(logbus.New(10), 1)
+	runner.status.setJobs([]JobStatus{
+		{ID: "job-1", Name: "a", Enabled: true, State: StatePending},
+		{ID: "job-2", Name: "b", Enabled: false, State: StateSkipped},
+	})
+
+	runner.markRoundWait(3, 30*time.Second, ErrRoundNotOpen)
+
+	status := runner.Status()
+	if status.Phase != PhaseWaiting {
+		t.Fatalf("phase = %q, want %q", status.Phase, PhaseWaiting)
+	}
+	if !status.WaitingForRound || status.RoundAttempts != 3 {
+		t.Fatalf("waiting=%v attempts=%d, want true/3", status.WaitingForRound, status.RoundAttempts)
+	}
+	if status.NextRoundCheckAt == nil || !status.NextRoundCheckAt.After(time.Now()) {
+		t.Fatal("next check time should be in the future")
+	}
+	if status.Jobs[0].State != StateWaiting {
+		t.Fatalf("pending job state = %q, want %q", status.Jobs[0].State, StateWaiting)
+	}
+	if status.Jobs[0].Message == "" {
+		t.Fatal("a waiting job should explain what it is waiting for")
+	}
+	if status.Jobs[1].State != StateSkipped {
+		t.Fatalf("disabled job state = %q, want it left alone", status.Jobs[1].State)
+	}
+}
+
+func TestClearRoundWaitReleasesJobs(t *testing.T) {
+	runner := New(logbus.New(10), 1)
+	runner.status.setJobs([]JobStatus{{ID: "job-1", Name: "a", Enabled: true, State: StatePending}})
+	runner.markRoundWait(2, time.Second, ErrRoundNotOpen)
+
+	runner.clearRoundWait("A1B2C3D4E5F60718293A4B5C6D7E8F90")
+
+	status := runner.Status()
+	if status.WaitingForRound || status.RoundAttempts != 0 || status.NextRoundCheckAt != nil {
+		t.Fatalf("wait state not cleared: %+v", status)
+	}
+	if status.Xkid != "A1B2C3D4E5F60718293A4B5C6D7E8F90" {
+		t.Fatalf("xkid = %q", status.Xkid)
+	}
+	if status.Phase != PhaseRunning {
+		t.Fatalf("phase = %q, want %q", status.Phase, PhaseRunning)
+	}
+	if status.Jobs[0].State != StatePending || status.Jobs[0].Message != "" {
+		t.Fatalf("job not released: %+v", status.Jobs[0])
+	}
+}
+
+func TestEnsureRoundKeepsWaitingUntilCancelled(t *testing.T) {
+	var checks int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&checks, 1)
+		// The portal before enrollment opens: no round link at all.
+		w.Write([]byte(`<html><body><a href="/jsxsd/xsxx/xsxxxx">学生信息</a></body></html>`))
+	}))
+	defer server.Close()
+
+	runner := New(logbus.New(100), ratelimit.Unlimited)
+	runner.session.portalURL = server.URL + "/jsxsd/framework/xsrkxz.htmlx"
+	runner.session.baseURL = server.URL + "/"
+	runner.status.setJobs([]JobStatus{{ID: "job-1", Name: "a", Enabled: true, State: StatePending}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancel()
+
+	if runner.ensureRound(ctx, runner.logger("", ""), 10*time.Millisecond) {
+		t.Fatal("ensureRound should report failure when it is cancelled while waiting")
+	}
+	if got := atomic.LoadInt32(&checks); got < 2 {
+		t.Fatalf("portal was checked %d times, want repeated retries", got)
+	}
+
+	status := runner.Status()
+	if !status.WaitingForRound || status.Phase != PhaseWaiting {
+		t.Fatalf("engine should still report waiting: %+v", status)
+	}
+	if status.Jobs[0].State != StateWaiting {
+		t.Fatalf("job state = %q, want %q", status.Jobs[0].State, StateWaiting)
+	}
+}
+
+func TestEnsureRoundStopsWhenReloginFails(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Always the CAS form: the session is gone, not the round.
+		w.Write([]byte(loginPageHTML))
+	}))
+	defer server.Close()
+
+	runner := New(logbus.New(100), ratelimit.Unlimited)
+	runner.session.portalURL = server.URL + "/jsxsd/framework/xsrkxz.htmlx"
+	runner.session.baseURL = server.URL + "/"
+
+	done := make(chan bool, 1)
+	go func() {
+		// No credentials are stored, so the re-login attempt fails and the
+		// wait must give up instead of spinning forever.
+		done <- runner.ensureRound(context.Background(), runner.logger("", ""), time.Millisecond)
+	}()
+
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("ensureRound should fail when the session cannot be restored")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("ensureRound did not give up on an unrecoverable session")
 	}
 }

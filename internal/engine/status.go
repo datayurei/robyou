@@ -12,17 +12,23 @@ const (
 	PhaseIdle      Phase = "idle"
 	PhaseLoggingIn Phase = "logging_in"
 	PhaseReady     Phase = "ready"
-	PhaseRunning   Phase = "running"
-	PhaseStopping  Phase = "stopping"
-	PhaseFinished  Phase = "finished"
-	PhaseError     Phase = "error"
+	// PhaseWaiting means the login is good but enrollment has not opened
+	// yet, so the engine is polling for the round to appear.
+	PhaseWaiting  Phase = "waiting"
+	PhaseRunning  Phase = "running"
+	PhaseStopping Phase = "stopping"
+	PhaseFinished Phase = "finished"
+	PhaseError    Phase = "error"
 )
 
 // RunState is the state of one job or one target within a run.
 type RunState string
 
 const (
-	StatePending   RunState = "pending"
+	StatePending RunState = "pending"
+	// StateWaiting is a job held before its first round because enrollment
+	// has not opened yet.
+	StateWaiting   RunState = "waiting"
 	StateRunning   RunState = "running"
 	StateSucceeded RunState = "succeeded"
 	StateCompleted RunState = "completed"
@@ -33,19 +39,25 @@ const (
 
 // Status is a snapshot of everything the GUI renders.
 type Status struct {
-	Phase                Phase            `json:"phase"`
-	LoggedIn             bool             `json:"logged_in"`
-	Username             string           `json:"username"`
-	Xkid                 string           `json:"xkid"`
-	Mode                 string           `json:"mode"`
-	RequestsPerSecond    float64          `json:"requests_per_second"`
-	RequestIntervalMS    int64            `json:"request_interval_ms"`
-	AboveRecommendedRate bool             `json:"above_recommended_rate"`
-	Message              string           `json:"message"`
-	StartedAt            *time.Time       `json:"started_at,omitempty"`
-	FinishedAt           *time.Time       `json:"finished_at,omitempty"`
-	Jobs                 []JobStatus      `json:"jobs"`
-	Enrolled             []EnrolledCourse `json:"enrolled"`
+	Phase                Phase   `json:"phase"`
+	LoggedIn             bool    `json:"logged_in"`
+	Username             string  `json:"username"`
+	Xkid                 string  `json:"xkid"`
+	Mode                 string  `json:"mode"`
+	RequestsPerSecond    float64 `json:"requests_per_second"`
+	RequestIntervalMS    int64   `json:"request_interval_ms"`
+	AboveRecommendedRate bool    `json:"above_recommended_rate"`
+	Message              string  `json:"message"`
+	// WaitingForRound is true while the engine is polling for enrollment to
+	// open; RoundAttempts counts those checks and NextRoundCheckAt is when
+	// the next one is due.
+	WaitingForRound  bool             `json:"waiting_for_round"`
+	RoundAttempts    int              `json:"round_attempts"`
+	NextRoundCheckAt *time.Time       `json:"next_round_check_at,omitempty"`
+	StartedAt        *time.Time       `json:"started_at,omitempty"`
+	FinishedAt       *time.Time       `json:"finished_at,omitempty"`
+	Jobs             []JobStatus      `json:"jobs"`
+	Enrolled         []EnrolledCourse `json:"enrolled"`
 }
 
 // JobStatus is the progress of one job.
@@ -121,6 +133,10 @@ func (s *statusStore) Snapshot() Status {
 	out.Enrolled = make([]EnrolledCourse, len(s.status.Enrolled))
 	copy(out.Enrolled, s.status.Enrolled)
 
+	if s.status.NextRoundCheckAt != nil {
+		next := *s.status.NextRoundCheckAt
+		out.NextRoundCheckAt = &next
+	}
 	if s.status.StartedAt != nil {
 		started := *s.status.StartedAt
 		out.StartedAt = &started
@@ -167,6 +183,17 @@ func (s *statusStore) updateJob(jobID string, mutate func(*JobStatus)) {
 		return
 	}
 	mutate(&s.status.Jobs[index])
+}
+
+// updateAllJobs applies mutate to every job, used for state that belongs to
+// the run as a whole, such as waiting for enrollment to open.
+func (s *statusStore) updateAllJobs(mutate func(*JobStatus)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for i := range s.status.Jobs {
+		mutate(&s.status.Jobs[i])
+	}
 }
 
 func (s *statusStore) updateTarget(jobID string, targetIndex int, mutate func(*TargetStatus)) {

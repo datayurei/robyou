@@ -40,6 +40,7 @@ const (
 	DefaultIntervalSeconds     = 3.0
 	DefaultRequestDelaySeconds = 0.5
 	DefaultLoginCheckSeconds   = 180.0
+	DefaultRoundRetrySeconds   = 30.0
 )
 
 // Config is the whole job configuration.
@@ -52,6 +53,9 @@ type Config struct {
 	// LoginCheckSeconds is how often the session liveness check runs.
 	// Zero disables it.
 	LoginCheckSeconds float64 `json:"login_check_seconds"`
+	// RoundRetrySeconds is how often to check whether enrollment has opened
+	// while no course-selection round is available yet.
+	RoundRetrySeconds float64 `json:"round_retry_seconds"`
 	// Mode is ModeSequence or ModeConcurrent.
 	Mode string `json:"mode"`
 	Jobs []Job  `json:"jobs"`
@@ -108,6 +112,7 @@ func Default() Config {
 		Version:           SchemaVersion,
 		RequestsPerSecond: ratelimit.DefaultRPS,
 		LoginCheckSeconds: DefaultLoginCheckSeconds,
+		RoundRetrySeconds: DefaultRoundRetrySeconds,
 		Mode:              ModeSequence,
 		Jobs: []Job{
 			{
@@ -160,6 +165,13 @@ func (c *Config) Normalize() {
 
 	if c.LoginCheckSeconds < 0 {
 		c.LoginCheckSeconds = 0
+	}
+
+	// Unlike the login check, waiting for enrollment to open cannot be
+	// turned off: without a round there is nothing to run, so a missing or
+	// nonsensical value falls back to the default interval.
+	if c.RoundRetrySeconds <= 0 {
+		c.RoundRetrySeconds = DefaultRoundRetrySeconds
 	}
 
 	switch strings.ToLower(strings.TrimSpace(c.Mode)) {
@@ -327,6 +339,7 @@ func fromLegacy(legacy legacyConfig) Config {
 		Version:           SchemaVersion,
 		RequestsPerSecond: ratelimit.DefaultRPS,
 		LoginCheckSeconds: loginCheck,
+		RoundRetrySeconds: DefaultRoundRetrySeconds,
 		Mode:              ModeSequence,
 		Jobs: []Job{{
 			ID:              "job-1",

@@ -80,7 +80,7 @@ func run(jobsPath, credsPath string, rate float64, verbose bool) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	runner := engine.New(bus, cfg.RequestsPerSecond)
+	runner := engine.New(bus, cfg.RequestsPerSecond, paths.Catalog)
 	// A closed enrollment round is not an error here: Start parks in the wait
 	// loop until it opens.
 	if _, err := runner.Connect(ctx, creds); err != nil {
@@ -102,6 +102,10 @@ func run(jobsPath, credsPath string, rate float64, verbose bool) error {
 		runner.Stop()
 		runner.Wait()
 	case <-done:
+	}
+
+	if err := runner.FlushCatalog(); err != nil {
+		bus.Publish(logbus.LevelWarn, "", "", "课程库写入失败: "+err.Error())
 	}
 
 	unsubscribe()

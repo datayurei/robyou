@@ -12,9 +12,11 @@ import (
 	"github.com/datayurei/robyou/httpclient"
 )
 
-const (
-	BaseURL = "https://jw.stu.edu.cn"
+// BaseURL is the teaching-management host. It is a var rather than a const so
+// tests can point the endpoints at a stub server; nothing changes it at runtime.
+var BaseURL = "https://jw.stu.edu.cn"
 
+const (
 	EndpointEnrollmentSession = "/jsxsd/xsxk/xklc_list?Ves632DSdyV=NEW_XSD_PYGL"
 	EndpointEnrollmentInit    = "/jsxsd/xsxk/newXsxkzx"
 	EndpointSelectBottom      = "/jsxsd/xsxk/selectBottom"
@@ -78,14 +80,37 @@ func (c *Course) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// DefaultPageSize is the page size the browser uses, and the one the polling
+// loop keeps: ten results per search is plenty when the list is already sorted
+// by relevance.
+const DefaultPageSize = 10
+
 type SearchOptions struct {
 	Keyword        string
 	Filters        map[string]string
 	PublicCategory *int
+	// Start is the row offset (DataTables iDisplayStart) and PageSize the
+	// rows per request (iDisplayLength). They exist so the catalog fetch can
+	// page through a whole list; the polling loop leaves both at zero and
+	// gets the historical first-page-of-ten behaviour.
+	Start    int
+	PageSize int
+}
+
+// SearchResult is one page of search results plus the server's row counts.
+type SearchResult struct {
+	Courses []Course
+	// Total is iTotalRecords and Filtered is iTotalDisplayRecords: how many
+	// rows exist, and how many match the current filters. Paging loops use
+	// Filtered to know when to stop.
+	Total    int
+	Filtered int
 }
 
 type searchResponse struct {
-	Data []Course `json:"aaData"`
+	Data     []Course        `json:"aaData"`
+	Total    json.RawMessage `json:"iTotalRecords"`
+	Filtered json.RawMessage `json:"iTotalDisplayRecords"`
 }
 
 type enrollResponse struct {
@@ -115,31 +140,42 @@ func InitializeSession(ctx context.Context, client *httpclient.Client, xkid stri
 	return nil
 }
 
-func SearchCourses(ctx context.Context, client *httpclient.Client, courseType CourseType, options SearchOptions) ([]Course, error) {
+// SearchCourses runs one search and returns a single page of results.
+//
+// Note the asymmetry between the two course types: a public-elective search
+// with an empty keyword lists the whole catalog, while an in-plan search with
+// an empty keyword returns nothing at all. Callers that want a complete list
+// can therefore only build one for public electives; the in-plan catalog has to
+// be accumulated from whatever keywords are actually searched.
+func SearchCourses(ctx context.Context, client *httpclient.Client, courseType CourseType, options SearchOptions) (SearchResult, error) {
 	endpoint, err := searchEndpoint(courseType)
 	if err != nil {
-		return nil, err
+		return SearchResult{}, err
 	}
 
 	body, err := client.PostFormWithParams(
 		ctx,
 		BaseURL+endpoint,
 		buildSearchParams(courseType, options.Keyword, options.Filters, options.PublicCategory),
-		buildDataTablePayload(),
+		buildDataTablePayload(options.Start, options.PageSize),
 	)
 	if err != nil {
-		return nil, fmt.Errorf("search courses: %w", err)
+		return SearchResult{}, fmt.Errorf("search courses: %w", err)
 	}
 	if IsSessionExpiredResponse(body) {
-		return nil, ErrSessionExpired
+		return SearchResult{}, ErrSessionExpired
 	}
 
 	var resp searchResponse
 	if err := json.Unmarshal([]byte(body), &resp); err != nil {
-		return nil, fmt.Errorf("parse search response: %w", err)
+		return SearchResult{}, fmt.Errorf("parse search response: %w", err)
 	}
 
-	return resp.Data, nil
+	return SearchResult{
+		Courses:  resp.Data,
+		Total:    rawInt(resp.Total),
+		Filtered: rawInt(resp.Filtered),
+	}, nil
 }
 
 func EnrollCourse(ctx context.Context, client *httpclient.Client, courseType CourseType, lessonID string, enrollID string) (bool, error) {
@@ -200,6 +236,15 @@ func CleanHTMLBreaks(value string) string {
 	return strings.Join(strings.Fields(value), " ")
 }
 
+// rawInt reads a count that the server may send as a number or a string.
+func rawInt(raw json.RawMessage) int {
+	value, err := strconv.Atoi(strings.TrimSpace(rawString(raw)))
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
 func rawString(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return ""
@@ -257,13 +302,20 @@ func buildSearchParams(courseType CourseType, keyword string, filters map[string
 	return params
 }
 
-func buildDataTablePayload() url.Values {
+func buildDataTablePayload(start, pageSize int) url.Values {
+	if pageSize <= 0 {
+		pageSize = DefaultPageSize
+	}
+	if start < 0 {
+		start = 0
+	}
+
 	payload := url.Values{
 		"sEcho":          {"1"},
 		"iColumns":       {"14"},
 		"sColumns":       {""},
-		"iDisplayStart":  {"0"},
-		"iDisplayLength": {"10"},
+		"iDisplayStart":  {strconv.Itoa(start)},
+		"iDisplayLength": {strconv.Itoa(pageSize)},
 	}
 
 	columnMappings := map[string]string{

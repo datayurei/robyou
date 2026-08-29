@@ -16,6 +16,9 @@ required), plus a headless CLI that runs the same engine.
 - **Configurable request rate**, shared by every job, so the total request rate is
   bounded no matter how many jobs run. Default and recommended: 1 rps.
 - Live log pane with level filters, keyword search and export.
+- **Course library**: course information is cached per enrollment round and rendered
+  locally, with local search (offline, instant) kept separate from server search
+  (costs requests, rate limited).
 - Automatic re-login and re-entry into the enrollment round when the session expires.
 - **Waits for enrollment to open.** Before the round starts the school portal has no
   course-selection entry at all, so the engine parks, rechecks on an interval, keeps
@@ -176,6 +179,35 @@ A pre-jobs `enroll_config.json` (flat `courses` list, `login_check_rounds`) is
 migrated automatically on load: its courses become a single job, and the round
 count becomes the equivalent number of seconds.
 
+## Course library (课程库)
+
+The 课程库 tab caches every course the program has seen, keyed by enrollment round
+(`xkid`), and renders it locally. Two searches live there, deliberately kept apart:
+
+| | 本地搜索 (local) | 服务器搜索 (server) |
+| --- | --- | --- |
+| Where it looks | The cache on disk | The school's search endpoint |
+| Cost | Free, instant, works logged out | One or more requests, under the rate limit |
+| What it does | Filters and sorts what is already known | Brings new courses into the cache |
+
+The two course types have to be cached differently, because the server treats them
+differently:
+
+- **Public electives** (`public`) are listed in full when the keyword is empty, so
+  「获取」 with an empty keyword and 翻页获取全部结果 pages through the entire catalog
+  in one pass.
+- **Planned courses** (`inplan`) return **nothing** without a keyword — the catalog
+  cannot be enumerated. So the in-plan cache is *accumulated*: every search made,
+  whether from the 课程库 tab or by a running job, merges its results in, and each
+  course remembers the keywords that found it. The cache is as complete as the
+  keywords you have tried, and it grows on its own while jobs poll.
+
+包含已满 / 冲突 / 限选课程 turns off the server-side filters (`sfym`, `sfct`, `sfxx`),
+so the cache holds the real list rather than only what a polling job would act on.
+
+Caches live in `catalog/<xkid>.json` next to the other configuration files, one file
+per round, and are reloaded on the next start.
+
 ## Waiting for enrollment to open
 
 You can log in and press 开始选课 before the enrollment window starts. The engine
@@ -212,13 +244,15 @@ Useful flags:
 ## Documentation
 
 `docs/enrollment-api.md` documents the reverse-engineered `jsxsd` endpoints, their
-parameters and the confidence level for each one.
+parameters and the confidence level for each one, including the empty-keyword
+asymmetry between the two search endpoints (§3.1) and the paging protocol (§3.2).
 
 ## Todos
 
 - [x] 支持未开启选课时反复尝试获取选课入口
 - [x] 参数化课程搜索的过滤选项
 - [x] 更友好的课程配置
+- [x] 缓存课程信息并支持本地检索
 - [ ] 实现cookie复用
 - [ ] 支持选保底课后反复搜索，退课后选课实现换成优先级更高的课的逻辑
 

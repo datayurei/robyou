@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/datayurei/robyou/internal/catalog"
 	"github.com/datayurei/robyou/internal/config"
 	"github.com/datayurei/robyou/internal/engine"
 	"github.com/datayurei/robyou/internal/logbus"
@@ -17,8 +18,9 @@ import (
 
 // Event names pushed to the frontend.
 const (
-	eventLog    = "robyou:log"
-	eventStatus = "robyou:status"
+	eventLog     = "robyou:log"
+	eventStatus  = "robyou:status"
+	eventCatalog = "robyou:catalog"
 )
 
 // statusPushInterval is how often the status snapshot is pushed to the GUI.
@@ -86,7 +88,7 @@ func NewApp() *App {
 	app.credentials = creds
 	app.credsSaved = strings.TrimSpace(creds.Username) != "" && creds.Password != ""
 
-	app.engine = engine.New(bus, cfg.RequestsPerSecond)
+	app.engine = engine.New(bus, cfg.RequestsPerSecond, paths.Catalog)
 
 	return app
 }
@@ -126,6 +128,10 @@ func (a *App) startup(ctx context.Context) {
 func (a *App) shutdown(context.Context) {
 	a.engine.Stop()
 	a.engine.Wait()
+
+	if err := a.engine.FlushCatalog(); err != nil {
+		a.bus.Publish(logbus.LevelWarn, "", "", "课程库写入失败: "+err.Error())
+	}
 
 	if a.stopPush != nil {
 		a.stopPush()
@@ -276,6 +282,39 @@ func (a *App) ExportLogs() (string, error) {
 
 	a.bus.Publish(logbus.LevelSuccess, "", "", "日志已导出到 "+path)
 	return path, nil
+}
+
+// CatalogStats summarises the cached course list for the current round.
+func (a *App) CatalogStats() catalog.Stats { return a.engine.CatalogStats() }
+
+// SearchCatalog searches the local cache. This is the offline half of the two
+// searches the GUI offers: it makes no request, returns instantly, and works
+// while a run is in progress or the session is logged out.
+func (a *App) SearchCatalog(query catalog.Query) catalog.Results {
+	return a.engine.SearchCatalog(query)
+}
+
+// RefreshCatalog is the online half: it asks the server for course information
+// and merges the answer into the cache. In-plan courses cannot be listed
+// without a keyword, so the cache for them grows one search at a time.
+func (a *App) RefreshCatalog(request engine.CatalogRefreshRequest) (engine.CatalogRefreshResult, error) {
+	result, err := a.engine.RefreshCatalog(a.ctx, request)
+	wailsruntime.EventsEmit(a.ctx, eventCatalog, a.engine.CatalogStats())
+	if err != nil {
+		return result, err
+	}
+
+	return result, nil
+}
+
+// ClearCatalog drops the cached course list for the current round.
+func (a *App) ClearCatalog() error {
+	if err := a.engine.ClearCatalog(); err != nil {
+		return err
+	}
+
+	wailsruntime.EventsEmit(a.ctx, eventCatalog, a.engine.CatalogStats())
+	return nil
 }
 
 // RateLimit reports the current pacing, for the rate control in the GUI.

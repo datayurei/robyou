@@ -145,7 +145,7 @@ Built by `buildSearchParams`. Defaults apply to both course types unless noted.
 
 | Parameter | Default | Marker | Meaning |
 | --- | --- | --- | --- |
-| `kcxx` | target `keyword` | ✅ | Course search keyword — the only field driven by user config. Matches against course name and code; the abbreviation's expansion is unknown |
+| `kcxx` | target `keyword` | ✅ | Course search keyword. Matches against course name and code; the abbreviation's expansion is unknown. **An empty value behaves differently per course type — see below** |
 | `skls` | `""` | ✅ | Teacher. Same key as the `skls` response field, which is the teacher name |
 | `skxq` | `""` | ✅ | 上课校区 — campus. The response returns the campus label as `xqmc`. Note there is no weekday filter in this parameter set |
 | `skjc` | `""` | ❗ | Unknown. Always sent empty. Paired with `endJc`, so the two plausibly bound a range |
@@ -157,6 +157,22 @@ Built by `buildSearchParams`. Defaults apply to both course types unless noted.
 | `kkdw` | `""` | ❗ | Unknown. Always sent empty |
 | `kcxz` | `""` | ❗ | Unknown. Always sent empty, and explicitly re-set to `""` for public search |
 | `szjylb` | `""` (public only) | ❗ | Public-elective category. Sent only for `public`. Set from `public_category` in `enroll_config.json`; empty means "all categories". Value list is undocumented — the README notes `1` corresponds to the first category in the school UI (e.g. 体育课), and `enroll_config.json` currently uses `0`. The abbreviation may expand to 素质教育类别, unverified |
+
+#### Empty-keyword asymmetry
+
+The two endpoints disagree about what an empty `kcxx` means:
+
+| Endpoint | `kcxx=""` | Marker |
+| --- | --- | --- |
+| `xsxkGgxxkxk` (public) | Returns the **whole public-elective catalog**, paged | ✅ |
+| `xsxkBxqjhxk` (inplan) | Returns **nothing** — an empty `aaData` | ✅ |
+
+This is why the two catalogs are cached differently (§7, `internal/catalog`): the
+public list can be fetched in one paged pass, while the in-plan list cannot be
+enumerated at all. The in-plan cache is therefore accumulated — every search the
+program runs contributes whatever it saw, keyed by the keyword that found it — and is
+only ever as complete as the keywords that have been tried. There is no known
+parameter that lists in-plan courses without a keyword.
 
 The three `sf*` flags share the prefix 是否过滤 ("whether to filter out"), and all three
 are sent as `true`. The search therefore always returns a pre-filtered list: no full
@@ -178,8 +194,8 @@ protocol — ✅ for the whole block, since the meanings come from that library.
 | `sEcho` | `1` | Request sequence number, echoed back by the server |
 | `iColumns` | `14` | Column count |
 | `sColumns` | `""` | Optional column-name list, unused |
-| `iDisplayStart` | `0` | Row offset — **paging is never advanced**, so only the first page is ever read |
-| `iDisplayLength` | `10` | Page size; caps every search at 10 results |
+| `iDisplayStart` | `0`, or `n × iDisplayLength` | Row offset. The polling loop reads only the first page; the catalog fetch advances it to page through a whole list |
+| `iDisplayLength` | `10`, or `100` | Page size. Ten for polling (what the browser sends), 100 for a catalog fetch, to spend fewer requests on the same list |
 | `mDataProp_0` … `mDataProp_13` | field names | Maps table column index → JSON field, defining the response key set |
 
 Column mapping: `jx0404id`, `kch`, `kcmc`, `fzmc`, `xf`, `skls`, `sksj`, `skdd`,
@@ -191,10 +207,16 @@ Column mapping: `jx0404id`, `kch`, `kcmc`, `fzmc`, `xf`, `skls`, `sksj`, `skdd`,
 { "aaData": [ { "jx0404id": "...", "kcmc": "...", "syrs": "12", ... } ] }
 ```
 
-Only `aaData` is consumed; the DataTables envelope fields (`iTotalRecords` etc.) are
-ignored. Field types are inconsistent across rows — numbers sometimes arrive as JSON
-numbers, sometimes as strings — so `Course.UnmarshalJSON` coerces every value to a
-string via `rawString` (string → number → bool → raw).
+`aaData` carries the rows. `iTotalRecords` and `iTotalDisplayRecords` are read into
+`SearchResult.Total` / `.Filtered`; the remaining envelope fields are ignored. Like the
+row values, these counts arrive sometimes as numbers and sometimes as strings, so they
+go through the same coercion. Field types are inconsistent across rows — numbers
+sometimes arrive as JSON numbers, sometimes as strings — so `Course.UnmarshalJSON`
+coerces every value to a string via `rawString` (string → number → bool → raw).
+
+A paging loop stops when a page comes back shorter than `iDisplayLength`, rather than
+trusting the counts, since neither total has been verified against a list long enough
+to matter.
 
 | JSON key | Go field | Marker | Meaning |
 | --- | --- | --- | --- |
@@ -342,6 +364,8 @@ above-recommended.
 | Job scheduling, polling loop, session recovery | `internal/engine/engine.go` |
 | Run status exposed to the GUI | `internal/engine/status.go` |
 | Job configuration and legacy migration | `internal/config/config.go` |
+| Per-round course cache and local search | `internal/catalog/catalog.go` |
+| Catalog fetching and paging | `internal/engine/catalog.go` |
 | Log fan-out to the GUI | `internal/logbus/logbus.go` |
 | Wails bindings (GUI API surface) | `app.go`, `main.go` |
 | Headless runner | `cmd/robyou-cli/main.go` |
@@ -357,6 +381,8 @@ none currently affects behaviour — but none can be used deliberately either.
 - Bootstrap: `sfylxkstr` — always sent empty.
 - Response fields: `fzmc`, `czOper`.
 - `szjylb` — accepted as a category number, but the code list has not been enumerated; `enroll_config.json` uses `0` while the README describes `1`.
+- Whether `iTotalRecords` / `iTotalDisplayRecords` are accurate, and whether the server caps how many rows one `iDisplayLength` may request.
+- Whether any parameter makes an in-plan search list courses without a keyword.
 - `kcxx` — its function (keyword) is certain; the abbreviation's expansion is not.
 - Whether `Ves632DSdyV=NEW_XSD_PYGL`, `Origin` and `Referer` are actually required.
 - Whether the enroll response's `success` is always an array.

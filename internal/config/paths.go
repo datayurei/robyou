@@ -9,6 +9,7 @@ import (
 const (
 	JobsFileName        = "enroll_config.json"
 	CredentialsFileName = "secret.json"
+	CatalogDirName      = "catalog"
 	appDirName          = "robyou"
 )
 
@@ -17,6 +18,9 @@ type Paths struct {
 	Dir         string `json:"dir"`
 	Jobs        string `json:"jobs"`
 	Credentials string `json:"credentials"`
+	// Catalog is the directory holding one cached course list per
+	// enrollment round.
+	Catalog string `json:"catalog"`
 	// Portable is true when the files live next to the working directory
 	// rather than in the per-user configuration directory.
 	Portable bool `json:"portable"`
@@ -34,6 +38,7 @@ func Resolve() Paths {
 				Dir:         wd,
 				Jobs:        local,
 				Credentials: filepath.Join(wd, CredentialsFileName),
+				Catalog:     filepath.Join(wd, CatalogDirName),
 				Portable:    true,
 			}
 		}
@@ -52,5 +57,6 @@ func Resolve() Paths {
 		Dir:         dir,
 		Jobs:        filepath.Join(dir, JobsFileName),
 		Credentials: filepath.Join(dir, CredentialsFileName),
+		Catalog:     filepath.Join(dir, CatalogDirName),
 	}
 }

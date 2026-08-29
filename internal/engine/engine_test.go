@@ -119,7 +119,7 @@ func TestStatusStoreUpdatesByID(t *testing.T) {
 }
 
 func TestStartRequiresCredentials(t *testing.T) {
-	runner := New(logbus.New(10), 1)
+	runner := New(logbus.New(10), 1, t.TempDir())
 	cfg := config.Config{Jobs: []config.Job{
 		{ID: "job-1", Name: "a", Enabled: true, Targets: []config.Target{
 			{Name: "t", Keyword: "k", Enabled: true, Type: config.TypeInPlan},
@@ -132,7 +132,7 @@ func TestStartRequiresCredentials(t *testing.T) {
 }
 
 func TestStartRejectsInvalidConfig(t *testing.T) {
-	runner := New(logbus.New(10), 1)
+	runner := New(logbus.New(10), 1, t.TempDir())
 
 	if err := runner.Start(config.Config{}); err == nil {
 		t.Fatal("Start() with no jobs should fail validation")
@@ -140,7 +140,7 @@ func TestStartRejectsInvalidConfig(t *testing.T) {
 }
 
 func TestSetRateIsReflectedInStatus(t *testing.T) {
-	runner := New(logbus.New(10), 1)
+	runner := New(logbus.New(10), 1, t.TempDir())
 
 	runner.SetRate(0.25)
 	status := runner.Status()
@@ -173,7 +173,7 @@ func TestSleepCtx(t *testing.T) {
 }
 
 func TestLoginWatchdogStopsWithItsContext(t *testing.T) {
-	runner := New(logbus.New(10), 1)
+	runner := New(logbus.New(10), 1, t.TempDir())
 	ctx, cancel := context.WithCancel(context.Background())
 
 	wait := runner.startLoginWatchdog(ctx, 3600)
@@ -193,7 +193,7 @@ func TestLoginWatchdogStopsWithItsContext(t *testing.T) {
 }
 
 func TestMarkRoundWaitHoldsJobsInWaitingState(t *testing.T) {
-	runner := New(logbus.New(10), 1)
+	runner := New(logbus.New(10), 1, t.TempDir())
 	runner.status.setJobs([]JobStatus{
 		{ID: "job-1", Name: "a", Enabled: true, State: StatePending},
 		{ID: "job-2", Name: "b", Enabled: false, State: StateSkipped},
@@ -223,7 +223,7 @@ func TestMarkRoundWaitHoldsJobsInWaitingState(t *testing.T) {
 }
 
 func TestClearRoundWaitReleasesJobs(t *testing.T) {
-	runner := New(logbus.New(10), 1)
+	runner := New(logbus.New(10), 1, t.TempDir())
 	runner.status.setJobs([]JobStatus{{ID: "job-1", Name: "a", Enabled: true, State: StatePending}})
 	runner.markRoundWait(2, time.Second, ErrRoundNotOpen)
 
@@ -253,7 +253,7 @@ func TestEnsureRoundKeepsWaitingUntilCancelled(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := New(logbus.New(100), ratelimit.Unlimited)
+	runner := New(logbus.New(100), ratelimit.Unlimited, t.TempDir())
 	runner.session.portalURL = server.URL + "/jsxsd/framework/xsrkxz.htmlx"
 	runner.session.baseURL = server.URL + "/"
 	runner.status.setJobs([]JobStatus{{ID: "job-1", Name: "a", Enabled: true, State: StatePending}})
@@ -284,7 +284,7 @@ func TestEnsureRoundStopsWhenReloginFails(t *testing.T) {
 	}))
 	defer server.Close()
 
-	runner := New(logbus.New(100), ratelimit.Unlimited)
+	runner := New(logbus.New(100), ratelimit.Unlimited, t.TempDir())
 	runner.session.portalURL = server.URL + "/jsxsd/framework/xsrkxz.htmlx"
 	runner.session.baseURL = server.URL + "/"
 

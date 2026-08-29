@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/datayurei/robyou/enrollment"
 	"github.com/datayurei/robyou/httpclient"
+	"github.com/datayurei/robyou/internal/catalog"
 	"github.com/datayurei/robyou/internal/config"
 	"github.com/datayurei/robyou/internal/logbus"
 	"github.com/datayurei/robyou/internal/ratelimit"
@@ -30,7 +32,51 @@ const (
 	// enrollment has not opened, only every Nth check is logged at info
 	// level, the rest at debug.
 	roundWaitLogEvery = 10
+
+	// catalogPageSize is how many rows a catalog fetch asks for per request.
+	// The polling loop keeps the browser's ten; a catalog fetch is paging
+	// through everything, so it takes bigger bites to spend fewer requests.
+	catalogPageSize = 100
+
+	// catalogMaxPages stops a paging loop that the server never ends.
+	catalogMaxPages = 200
 )
+
+// ErrCatalogBusy is returned when a catalog fetch is already running.
+var ErrCatalogBusy = errors.New("课程库正在更新中 (a catalog fetch is already running)")
+
+// ErrNoRound is returned by catalog fetches before a round has been entered.
+var ErrNoRound = errors.New("尚未进入选课轮次 (no enrollment round has been entered)")
+
+// CatalogRefreshRequest asks the server for course information and folds the
+// answer into the cache.
+type CatalogRefreshRequest struct {
+	// Type is inplan or public.
+	Type string `json:"type"`
+	// Keyword is required for in-plan searches: the server returns nothing
+	// for an empty in-plan keyword, while an empty public keyword lists the
+	// whole public catalog.
+	Keyword        string `json:"keyword"`
+	PublicCategory *int   `json:"public_category,omitempty"`
+	// IncludeFiltered turns off the server-side filters that hide full,
+	// clashing and restricted courses, so the cache holds the real list.
+	IncludeFiltered bool `json:"include_filtered"`
+	// All pages through every result instead of fetching one page.
+	All bool `json:"all"`
+}
+
+// CatalogRefreshResult reports what a fetch retrieved.
+type CatalogRefreshResult struct {
+	Type      string `json:"type"`
+	Keyword   string `json:"keyword"`
+	Fetched   int    `json:"fetched"`
+	Added     int    `json:"added"`
+	Updated   int    `json:"updated"`
+	Total     int    `json:"total"`
+	Pages     int    `json:"pages"`
+	Truncated bool   `json:"truncated"`
+	Message   string `json:"message"`
+}
 
 // ConnectResult reports what Connect achieved. A login can succeed while
 // enrollment has not opened yet, which is a normal state rather than an error,
@@ -49,6 +95,11 @@ type Engine struct {
 	client  *httpclient.Client
 	session *Session
 	status  *statusStore
+	catalog *catalog.Store
+
+	// catalogFetching serialises server-side catalog fetches; local searches
+	// are unaffected and always available.
+	catalogFetching atomic.Bool
 
 	mu       sync.Mutex
 	creds    config.Credentials
@@ -61,8 +112,10 @@ type Engine struct {
 	lastRelogin time.Time
 }
 
-// New builds an engine logging to bus and pacing requests at rps.
-func New(bus *logbus.Bus, rps float64) *Engine {
+// New builds an engine logging to bus and pacing requests at rps. Cached
+// course information is stored under catalogDir; an empty directory keeps the
+// cache in memory only.
+func New(bus *logbus.Bus, rps float64, catalogDir string) *Engine {
 	limiter := ratelimit.New(rps)
 	client := httpclient.New(httpclient.WithLimiter(limiter))
 
@@ -72,6 +125,7 @@ func New(bus *logbus.Bus, rps float64) *Engine {
 		client:  client,
 		session: NewSession(client),
 		status:  newStatusStore(),
+		catalog: catalog.NewStore(catalogDir),
 	}
 	engine.status.update(func(status *Status) {
 		status.RequestsPerSecond = limiter.RPS()
@@ -384,7 +438,7 @@ func (e *Engine) runTarget(ctx context.Context, job config.Job, index int, targe
 	})
 	log.Infof("搜索 [%s] 关键词=%q", courseType, target.Keyword)
 
-	courses, err := enrollment.SearchCourses(ctx, e.client, courseType, enrollment.SearchOptions{
+	result, err := enrollment.SearchCourses(ctx, e.client, courseType, enrollment.SearchOptions{
 		Keyword:        target.Keyword,
 		Filters:        target.Filters,
 		PublicCategory: target.PublicCategory,
@@ -406,7 +460,15 @@ func (e *Engine) runTarget(ctx context.Context, job config.Job, index int, targe
 		return false, nil
 	}
 
+	courses := result.Courses
 	e.status.updateTarget(job.ID, index, func(status *TargetStatus) { status.Found = len(courses) })
+
+	// Every search feeds the cache. For in-plan courses this is the only way
+	// the catalog ever grows, since they cannot be listed without a keyword.
+	if merged := e.catalog.Merge(e.session.Xkid(), target.Type, target.Keyword, courses); merged.Added > 0 {
+		log.Debugf("课程库新增 %d 门课程 (共 %d)", merged.Added, merged.Total)
+	}
+
 	if len(courses) == 0 {
 		log.Infof("没有匹配的课程")
 		return false, nil

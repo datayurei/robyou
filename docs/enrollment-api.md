@@ -3,7 +3,7 @@
 Reference for the `jw.stu.edu.cn` (`jsxsd`) course-selection endpoints used by this project.
 
 Everything here is reverse-engineered from live traffic and from the code in
-`enrollment/enrollment.go`, `httpclient/client.go`, `main.go` and
+`enrollment/enrollment.go`, `httpclient/client.go`, `internal/engine/` and
 `cmd/public_search_probe/main.go`. There is no official upstream specification, so
 parameter meanings are annotated with a confidence marker:
 
@@ -26,9 +26,11 @@ cross-references (see §9).
 | Base URL | `https://jw.stu.edu.cn` (`enrollment.BaseURL`) |
 | Auth | CAS SSO session cookies from `https://sso.stu.edu.cn/login`, plus a `jsxsd` session established by the bootstrap calls in §2 |
 | Cookie handling | `net/http/cookiejar`, in-memory per process (`httpclient.New`) |
+| Request pacing | Every request waits on a shared `ratelimit.Limiter` inside `httpclient.Client.do`. Default 1 rps; configurable, including unlimited (see §6) |
 | Request encoding | `application/x-www-form-urlencoded; charset=UTF-8` for POST bodies; query strings are standard URL encoding |
 | Response encoding | JSON for search/enroll, HTML for bootstrap pages |
-| Timeout | 10s per request (`httpclient.Client`) |
+| Timeout | 10s per request (`httpclient.DefaultTimeout`) |
+| Cancellation | Every call takes a `context.Context`; cancelling it aborts both the rate-limit wait and the in-flight request |
 | Headers | A fixed Chrome-like header set (`httpclient.defaultHeaders`). The probe additionally sends `Origin: https://jw.stu.edu.cn` and `Referer: <BaseURL>/jsxsd/xsxk/newXsxkzx?jx0502zbid=<xkid>` — the server appears to accept the search without them, since the main loop omits both |
 
 ### Endpoint map
@@ -254,9 +256,15 @@ The second case means an HTML page was returned instead of JSON — typically th
 or portal page, whose navigation bar carries the log-out link.
 
 The constant holding `注销` is named `RateLimitIndicator`, which is misleading: the
-check it feeds is session expiry, and no rate-limit handling exists. Both search and
-enroll return `ErrSessionExpired`; the polling loop stops and asks for a restart,
-since there is no re-login path once running.
+check it feeds is session expiry, and it has nothing to do with rate limiting — the
+only rate control is the client-side limiter described in §6. Both search and enroll
+return `ErrSessionExpired`, which `engine.recoverSession` handles by logging in again
+and re-running the §2.4 bootstrap. Concurrent jobs that hit the same expiry within
+`reloginCooldown` (30s) reuse that one recovery instead of logging in repeatedly. A
+failed recovery ends the run.
+
+A periodic liveness check (`login_check_seconds`, default 180s) runs the §2.1
+verification independently of the polling loop and triggers the same recovery path.
 
 Other failures surface as wrapped errors (`search courses: …`, `enroll course: …`,
 `parse search response: …`) and are logged without stopping the loop.
@@ -266,32 +274,52 @@ Other failures surface as wrapped errors (`search courses: …`, `enroll course:
 ## 6. Call sequence
 
 ```
-POST sso login
+POST sso login                                   (engine.Session.Login)
  └─ GET  /jsxsd/framework/xsrkxz.htmlx        → round list URL
      └─ GET  /jsxsd/xsxk/xklc_list?…          → xkid (32 hex)
          ├─ GET  /jsxsd/xsxk/newXsxkzx?jx0502zbid=xkid
          └─ GET  /jsxsd/xsxk/selectBottom?jx0502zbid=xkid&sfylxkstr=
-             └─ loop, every interval_seconds:
-                 ├─ (every login_check_rounds) GET sso /login → liveness check
-                 └─ per enabled target:
-                     ├─ POST search endpoint          → up to 10 courses
-                     ├─ sleep 1s (hardcoded)
-                     └─ per course: GET enroll endpoint
-                         └─ sleep request_delay_seconds (default 0.5s)
+             ├─ every login_check_seconds: GET sso /login → liveness check
+             └─ per job (sequence: one at a time; concurrent: all at once):
+                 └─ loop, every job interval_seconds:
+                     └─ per enabled target:
+                         ├─ POST search endpoint      → up to 10 courses
+                         └─ per course: GET enroll endpoint
+                             └─ sleep request_delay_seconds
 ```
 
-Client-side pacing — the 1s pre-enrollment pause, `request_delay_seconds`, and
-`interval_seconds` — exists to avoid tripping server-side throttling. No server rate
-limit has been characterised.
+Every arrow above is a request, and every request first takes a slot from one
+process-wide `ratelimit.Limiter`. Running jobs concurrently therefore does not
+increase the request rate — it only changes the order requests are issued in.
+
+Pacing is layered:
+
+| Control | Scope | Default |
+| --- | --- | --- |
+| `requests_per_second` | Every request in the process | 1.0 (`ratelimit.Recommended`); `0` disables pacing |
+| `interval_seconds` | Pause between polling rounds of one job | 3s |
+| `request_delay_seconds` | Extra pause between enroll attempts within a target | 0.5s |
+
+The limiter is the only one of the three that bounds the *total* rate; the other two
+shape the polling pattern. No server rate limit has been characterised, which is why
+the default is deliberately conservative and rates above it are logged as
+above-recommended.
 
 ## 7. Where this lives in the code
 
 | Concern | Location |
 | --- | --- |
 | Endpoints, params, models | `enrollment/enrollment.go` |
-| Cookie jar, headers, GET/POST helpers | `httpclient/client.go` |
+| Cookie jar, headers, GET/POST helpers, pacing hook | `httpclient/client.go` |
+| Request pacing | `internal/ratelimit/ratelimit.go` |
 | Login, HTML scraping, login check | `parser/parser.go` |
-| Orchestration and polling loop | `main.go` |
+| Login and §2 bootstrap | `internal/engine/session.go` |
+| Job scheduling, polling loop, session recovery | `internal/engine/engine.go` |
+| Run status exposed to the GUI | `internal/engine/status.go` |
+| Job configuration and legacy migration | `internal/config/config.go` |
+| Log fan-out to the GUI | `internal/logbus/logbus.go` |
+| Wails bindings (GUI API surface) | `app.go`, `main.go` |
+| Headless runner | `cmd/robyou-cli/main.go` |
 | Manual public-search replay (`-print-curl`, `-raw`) | `cmd/public_search_probe/main.go` |
 
 ## 8. Open questions

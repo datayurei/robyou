@@ -1,6 +1,7 @@
 package parser
 
 import (
+	"context"
 	"net/url"
 	"regexp"
 	"strings"
@@ -8,18 +9,6 @@ import (
 	"github.com/PuerkitoBio/goquery"
 	"github.com/datayurei/robyou/httpclient"
 )
-
-// func ExtractLtFromLogin(body []byte) (string, bool) {
-// 	doc, err := goquery.NewDocumentFromReader(bytes.NewReader(body))
-//
-// 	if err != nil {
-// 		return "", false
-// 	}
-//
-// 	lt, exists := doc.Find(`input[name="lt"]`).Attr("value")
-// 	return lt, exists
-//
-// }
 
 func ExtractLtFromLogin(body string) (string, bool) {
 
@@ -68,7 +57,12 @@ func ExtractXkid(body string) (string, bool) {
 	return xkid, xkid != ""
 }
 
-func CheckLoginStatus(client *httpclient.Client) bool {
-	resp, _ := client.GetString("https://sso.stu.edu.cn/login")
+// CheckLoginStatus reports whether the SSO session is still alive. The login
+// page renders a "您当前使用" banner only for an authenticated visitor.
+func CheckLoginStatus(ctx context.Context, client *httpclient.Client) bool {
+	resp, err := client.Get(ctx, "https://sso.stu.edu.cn/login")
+	if err != nil {
+		return false
+	}
 	return strings.Contains(resp, "您当前使用")
 }

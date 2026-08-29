@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/datayurei/robyou/enrollment"
 	"github.com/datayurei/robyou/httpclient"
+	"github.com/datayurei/robyou/internal/config"
+	"github.com/datayurei/robyou/internal/ratelimit"
 	"github.com/datayurei/robyou/parser"
 )
 
@@ -24,34 +27,33 @@ type searchResponse struct {
 	Data []map[string]any `json:"aaData"`
 }
 
-type secretConfig struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
 func main() {
 	var keyword string
 	var secretPath string
 	var publicCategory int
 	var printCurl bool
 	var raw bool
+	var rate float64
 
 	flag.StringVar(&keyword, "keyword", "", "public course search keyword")
 	flag.StringVar(&secretPath, "secret", "secret.json", "credential file path")
 	flag.IntVar(&publicCategory, "public-category", -1, "public course category number; negative means unset")
 	flag.BoolVar(&printCurl, "print-curl", false, "print a replayable curl command with live cookies")
 	flag.BoolVar(&raw, "raw", false, "print the full raw response body")
+	flag.Float64Var(&rate, "rps", ratelimit.DefaultRPS, "requests per second; 0 disables pacing")
 	flag.Parse()
 
-	client := httpclient.New()
-	if err := loginWithSecret(client, secretPath); err != nil {
+	ctx := context.Background()
+	limiter := ratelimit.New(rate)
+	client := httpclient.New(httpclient.WithLimiter(limiter))
+	if err := loginWithSecret(ctx, client, secretPath); err != nil {
 		failf("login: %v", err)
 	}
 
 	fmt.Println("login status: ok")
 	printCookieSummary(client)
 
-	body, err := client.GetString(enrollment.BaseURL + enrollment.EndpointEnrollmentSession)
+	body, err := client.Get(ctx, enrollment.BaseURL+enrollment.EndpointEnrollmentSession)
 	if err != nil {
 		failf("open enrollment session page: %v", err)
 	}
@@ -61,7 +63,7 @@ func main() {
 	}
 	fmt.Printf("xkid: %s\n", xkid)
 
-	if err := enrollment.InitializeSession(client, xkid); err != nil {
+	if err := enrollment.InitializeSession(ctx, client, xkid); err != nil {
 		failf("initialize enrollment session: %v", err)
 	}
 	fmt.Println("enrollment session initialized")
@@ -84,6 +86,12 @@ func main() {
 		failf("build request: %v", err)
 	}
 	setHeaders(req, xkid)
+
+	// The probe builds its own request, so it has to take a rate-limit slot
+	// explicitly instead of going through the client's helpers.
+	if err := limiter.Wait(ctx); err != nil {
+		failf("rate limit wait: %v", err)
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -133,14 +141,14 @@ func buildPublicSearchQuery(keyword string, publicCategory *int) url.Values {
 	return query
 }
 
-func loginWithSecret(client *httpclient.Client, secretPath string) error {
+func loginWithSecret(ctx context.Context, client *httpclient.Client, secretPath string) error {
 	secret, err := loadSecret(secretPath)
 	if err != nil {
 		return err
 	}
 
 	loginURL := "https://sso.stu.edu.cn/login?service=http%3A%2F%2Fjw.stu.edu.cn%2F"
-	loginPage, err := client.GetString(loginURL)
+	loginPage, err := client.Get(ctx, loginURL)
 	if err != nil {
 		return fmt.Errorf("open login page: %w", err)
 	}
@@ -158,20 +166,20 @@ func loginWithSecret(client *httpclient.Client, secretPath string) error {
 		"_eventId":  {"submit"},
 	}
 
-	if _, err := client.PostFormString(loginURL, loginData); err != nil {
+	if _, err := client.PostForm(ctx, loginURL, loginData); err != nil {
 		return fmt.Errorf("submit login form: %w", err)
 	}
-	if _, err := client.GetString(enrollment.BaseURL); err != nil {
+	if _, err := client.Get(ctx, enrollment.BaseURL); err != nil {
 		return fmt.Errorf("open jw home: %w", err)
 	}
-	if _, err := client.GetString(loginURL); err != nil {
+	if _, err := client.Get(ctx, loginURL); err != nil {
 		return fmt.Errorf("follow sso redirect: %w", err)
 	}
-	if _, err := client.GetString(enrollment.BaseURL + enrollment.EndpointEnrollmentSession); err != nil {
+	if _, err := client.Get(ctx, enrollment.BaseURL+enrollment.EndpointEnrollmentSession); err != nil {
 		return fmt.Errorf("open enrollment session page: %w", err)
 	}
 
-	if !parser.CheckLoginStatus(client) {
+	if !parser.CheckLoginStatus(ctx, client) {
 		return fmt.Errorf("login status check failed")
 	}
 
@@ -310,21 +318,16 @@ func printResponseSummary(body []byte) {
 	)
 }
 
-func loadSecret(path string) (secretConfig, error) {
-	data, err := os.ReadFile(path)
+func loadSecret(path string) (config.Credentials, error) {
+	creds, err := config.LoadCredentials(path)
 	if err != nil {
-		return secretConfig{}, err
+		return config.Credentials{}, err
+	}
+	if strings.TrimSpace(creds.Username) == "" || strings.TrimSpace(creds.Password) == "" {
+		return config.Credentials{}, fmt.Errorf("username or password is empty in %s", path)
 	}
 
-	var secret secretConfig
-	if err := json.Unmarshal(data, &secret); err != nil {
-		return secretConfig{}, err
-	}
-	if strings.TrimSpace(secret.Username) == "" || strings.TrimSpace(secret.Password) == "" {
-		return secretConfig{}, fmt.Errorf("username or password is empty")
-	}
-
-	return secret, nil
+	return creds, nil
 }
 
 func optionalInt(value int) *int {

@@ -1,0 +1,14 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "robyou",
+  "outputfilename": "robyou",
+  "frontend:dir": "frontend",
+  "wailsjsdir": "./frontend",
+  "author": {
+    "name": "datayurei"
+  },
+  "info": {
+    "productName": "Robyou",
+    "comments": "STU 选课助手"
+  }
+}

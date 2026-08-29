@@ -1,6 +1,7 @@
 package enrollment
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -92,13 +93,13 @@ type enrollResponse struct {
 	Message string `json:"message"`
 }
 
-func InitializeSession(client *httpclient.Client, xkid string) error {
+func InitializeSession(ctx context.Context, client *httpclient.Client, xkid string) error {
 	if strings.TrimSpace(xkid) == "" {
 		return fmt.Errorf("xkid is empty")
 	}
 
 	initURL := BaseURL + EndpointEnrollmentInit
-	if _, err := client.GetStringWithParams(initURL, url.Values{"jx0502zbid": {xkid}}); err != nil {
+	if _, err := client.GetWithParams(ctx, initURL, url.Values{"jx0502zbid": {xkid}}); err != nil {
 		return fmt.Errorf("initialize enrollment page: %w", err)
 	}
 
@@ -107,20 +108,21 @@ func InitializeSession(client *httpclient.Client, xkid string) error {
 		"jx0502zbid": {xkid},
 		"sfylxkstr":  {""},
 	}
-	if _, err := client.GetStringWithParams(bottomURL, params); err != nil {
+	if _, err := client.GetWithParams(ctx, bottomURL, params); err != nil {
 		return fmt.Errorf("initialize enrollment bottom frame: %w", err)
 	}
 
 	return nil
 }
 
-func SearchCourses(client *httpclient.Client, courseType CourseType, options SearchOptions) ([]Course, error) {
+func SearchCourses(ctx context.Context, client *httpclient.Client, courseType CourseType, options SearchOptions) ([]Course, error) {
 	endpoint, err := searchEndpoint(courseType)
 	if err != nil {
 		return nil, err
 	}
 
-	body, err := client.PostFormStringWithParams(
+	body, err := client.PostFormWithParams(
+		ctx,
 		BaseURL+endpoint,
 		buildSearchParams(courseType, options.Keyword, options.Filters, options.PublicCategory),
 		buildDataTablePayload(),
@@ -140,7 +142,7 @@ func SearchCourses(client *httpclient.Client, courseType CourseType, options Sea
 	return resp.Data, nil
 }
 
-func EnrollCourse(client *httpclient.Client, courseType CourseType, lessonID string, enrollID string) (bool, error) {
+func EnrollCourse(ctx context.Context, client *httpclient.Client, courseType CourseType, lessonID string, enrollID string) (bool, error) {
 	endpoint, err := enrollEndpoint(courseType)
 	if err != nil {
 		return false, err
@@ -160,7 +162,7 @@ func EnrollCourse(client *httpclient.Client, courseType CourseType, lessonID str
 		"trjf":     {""},
 	}
 
-	body, err := client.GetStringWithParams(BaseURL+endpoint, params)
+	body, err := client.GetWithParams(ctx, BaseURL+endpoint, params)
 	if err != nil {
 		return false, fmt.Errorf("enroll course: %w", err)
 	}

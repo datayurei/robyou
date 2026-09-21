@@ -89,11 +89,31 @@ jobs:
           fi
           wails "${args[@]}"
 
+      # upload-artifact re-zips what it is given and drops the executable
+      # bit on the way, which leaves the Linux binary unrunnable and breaks a
+      # macOS .app bundle outright. Archiving first preserves the modes and
+      # the bundle layout; a Windows .exe needs neither, so it goes as is.
+      - name: Package
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          NAME: robyou-gui-${{ matrix.name }}
+        run: |
+          mkdir -p dist
+          tar -czf "dist/${NAME}.tar.gz" -C build/bin .
+
+      - name: Stage Windows build
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp build/bin/* dist/
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: robyou-gui-${{ matrix.name }}
-          path: build/bin/*
+          path: dist/*
           if-no-files-found: error
 
   build-cli:

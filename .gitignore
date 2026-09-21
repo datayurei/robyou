@@ -4,6 +4,8 @@ enroll_config.json
 # Course cache written by the app next to a portable config.
 /catalog/
 
-# Wails build output and generated bindings
+# Wails build output, CI packaging staging, and generated bindings.
+# Anchored so it cannot swallow frontend/dist, which holds GUI sources.
 build/bin/
+/dist/
 frontend/wailsjs/

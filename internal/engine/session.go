@@ -109,10 +109,11 @@ func (s *Session) Bootstrap(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("打开教务首页时被跳转到登录页: %w", enrollment.ErrSessionExpired)
 	}
 
-	roundURL, ok := parser.ExtractXklcWithBase(portal, s.baseURL)
-	if !ok {
-		return "", fmt.Errorf("%w: 教务首页没有选课入口链接 (no xklc_list link on the portal)", ErrRoundNotOpen)
-	}
+	// roundURL, ok := parser.ExtractXklcWithBase(portal, s.baseURL)
+	// if !ok {
+	// 	return "", fmt.Errorf("%w: 教务首页没有选课入口链接 (no xklc_list link on the portal)", ErrRoundNotOpen)
+	// }
+	roundURL := "https://jw.stu.edu.cn/jsxsd/xsxk/xklc_list"
 
 	roundPage, err := s.client.Get(ctx, roundURL)
 	if err != nil {

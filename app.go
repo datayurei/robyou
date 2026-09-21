@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/datayurei/robyou/enrollment"
 	"github.com/datayurei/robyou/internal/catalog"
 	"github.com/datayurei/robyou/internal/config"
 	"github.com/datayurei/robyou/internal/engine"
@@ -282,6 +283,12 @@ func (a *App) ExportLogs() (string, error) {
 
 	a.bus.Publish(logbus.LevelSuccess, "", "", "日志已导出到 "+path)
 	return path, nil
+}
+
+// PublicCategories lists the public-elective categories (素质教育类别) so the
+// GUI can show their names instead of the bare numbers the school system uses.
+func (a *App) PublicCategories() []enrollment.PublicCategory {
+	return enrollment.PublicCategories()
 }
 
 // CatalogStats summarises the cached course list for the current round.

@@ -156,7 +156,27 @@ Built by `buildSearchParams`. Defaults apply to both course types unless noted.
 | `skfs` | `""` | ❗ | Unknown. Always sent empty. Shares a stem with the `skfsmc` response field |
 | `kkdw` | `""` | ❗ | Unknown. Always sent empty |
 | `kcxz` | `""` | ❗ | Unknown. Always sent empty, and explicitly re-set to `""` for public search |
-| `szjylb` | `""` (public only) | ❗ | Public-elective category. Sent only for `public`. Set from `public_category` in `enroll_config.json`; empty means "all categories". Value list is undocumented — the README notes `1` corresponds to the first category in the school UI (e.g. 体育课), and `enroll_config.json` currently uses `0`. The abbreviation may expand to 素质教育类别, unverified |
+| `szjylb` | `""` (public only) | ✅ | 素质教育类别 — public-elective category. Sent only for `public`. Set from `public_category` in `enroll_config.json`; empty means "all categories". The values are the school UI's own dropdown read top to bottom from zero, so `0` is its 「--所有课程--」 entry and filters nothing — see the category list below |
+
+#### Category list (`szjylb`)
+
+The dropdown above the public-course list, counted from the top starting at zero:
+
+| `szjylb` | Category |
+| --- | --- |
+| `0` | `--所有课程--` (every category; same as sending `""`) |
+| `1` | 体育课 |
+| `2` | 艺术教育课 |
+| `3` | 书院实践（劳动）课程 |
+| `4` | 公民与社会选修课 |
+| `5` | 文化与价值选修课 |
+| `6` | 科学与科学方法选修课 |
+| `7` | 其他通识课 |
+
+The table lives in `enrollment/category.go`. The result rows carry **no** category of
+their own, so the only way to learn which category a course is in is to ask for one
+category at a time — which is what the 课程库's 按类别逐个获取 does, recording the
+category it searched under on every course the pass returns.
 
 #### Empty-keyword asymmetry
 
@@ -224,7 +244,7 @@ to matter.
 | `jx02id` | `EnrollID` | ✅ | Course ID; sent back as `kcid` when enrolling. **Not in the column mapping** — it is returned anyway, and both IDs are required for enrollment |
 | `kch` | `Code` | ✅ | Course code (课程号) |
 | `kcmc` | `Name` | ✅ | Course name (课程名称) |
-| `fzmc` | `GroupName` | ❗ | Unknown. Read into `GroupName` but never used for any decision |
+| `fzmc` | `GroupName` | ❗ | Unknown. Read into `GroupName` but never used for any decision. Not the 素质教育类别: no response field carries one, which is why the cache has to remember the `szjylb` it searched under |
 | `xf` | `Credit` | ✅ | Credits (学分) |
 | `skls` | `Teacher` | ✅ | Teacher (授课老师) |
 | `sksj` | `Time` | ✅ | Class time (上课时间); contains `<br/>` markup, cleaned by `CleanHTMLBreaks` |
@@ -357,6 +377,7 @@ above-recommended.
 | Concern | Location |
 | --- | --- |
 | Endpoints, params, models | `enrollment/enrollment.go` |
+| Public-elective category list (`szjylb`) | `enrollment/category.go` |
 | Cookie jar, headers, GET/POST helpers, pacing hook | `httpclient/client.go` |
 | Request pacing | `internal/ratelimit/ratelimit.go` |
 | Login, HTML scraping, login check | `parser/parser.go` |
@@ -380,7 +401,6 @@ none currently affects behaviour — but none can be used deliberately either.
 - Enrollment: `cfbs` (sent as the literal `"null"`), `xkzy`, `trjf` — the latter two confirmed vendor-wide but never populated anywhere.
 - Bootstrap: `sfylxkstr` — always sent empty.
 - Response fields: `fzmc`, `czOper`.
-- `szjylb` — accepted as a category number, but the code list has not been enumerated; `enroll_config.json` uses `0` while the README describes `1`.
 - Whether `iTotalRecords` / `iTotalDisplayRecords` are accurate, and whether the server caps how many rows one `iDisplayLength` may request.
 - Whether any parameter makes an in-plan search list courses without a keyword.
 - `kcxx` — its function (keyword) is certain; the abbreviation's expansion is not.

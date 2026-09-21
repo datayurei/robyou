@@ -37,7 +37,7 @@ func main() {
 
 	flag.StringVar(&keyword, "keyword", "", "public course search keyword")
 	flag.StringVar(&secretPath, "secret", "secret.json", "credential file path")
-	flag.IntVar(&publicCategory, "public-category", -1, "public course category number; negative means unset")
+	flag.IntVar(&publicCategory, "public-category", -1, "public course category (szjylb): "+categoryHelp()+"; negative means unset")
 	flag.BoolVar(&printCurl, "print-curl", false, "print a replayable curl command with live cookies")
 	flag.BoolVar(&raw, "raw", false, "print the full raw response body")
 	flag.Float64Var(&rate, "rps", ratelimit.DefaultRPS, "requests per second; 0 disables pacing")
@@ -116,6 +116,16 @@ func main() {
 	}
 
 	printResponseSummary(respBody)
+}
+
+// categoryHelp spells the szjylb numbers out in the flag's help text, so the
+// probe can be pointed at one category without looking the list up.
+func categoryHelp() string {
+	parts := []string{}
+	for _, category := range enrollment.PublicCategories() {
+		parts = append(parts, fmt.Sprintf("%d=%s", category.Value, category.Name))
+	}
+	return strings.Join(parts, " ")
 }
 
 func buildPublicSearchQuery(keyword string, publicCategory *int) url.Values {

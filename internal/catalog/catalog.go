@@ -58,11 +58,36 @@ type Entry struct {
 	Remaining    string `json:"remaining"`
 	TeachMode    string `json:"teach_mode,omitempty"`
 	ConflictNote string `json:"conflict_note,omitempty"`
+	// PublicCategory is the 素质教育类别 the course was found under. The
+	// search rows carry no category of their own, so it is known only for
+	// courses seen through a category-restricted search; nil means no such
+	// search has surfaced this course yet.
+	PublicCategory *int `json:"public_category,omitempty"`
 	// Keywords records which searches surfaced this course. For in-plan
 	// courses it is the only clue about how to find them again.
 	Keywords    []string  `json:"keywords,omitempty"`
 	FirstSeenAt time.Time `json:"first_seen_at"`
 	LastSeenAt  time.Time `json:"last_seen_at"`
+}
+
+// Source describes the search a page of results came from. It carries what the
+// cache can learn about a course beyond the row itself: the keyword that found
+// it, and the category it was filed under when the search asked for one.
+type Source struct {
+	Type           string `json:"type"`
+	Keyword        string `json:"keyword"`
+	PublicCategory *int   `json:"public_category,omitempty"`
+}
+
+// category returns the category this search pins its results to, or nil when
+// it pins them to none. 全部课程 (PublicCategoryAll) is not a category, and an
+// in-plan search never carries one.
+func (s Source) category() *int {
+	if s.Type != TypePublic || !enrollment.NarrowsPublicSearch(s.PublicCategory) {
+		return nil
+	}
+	value := *s.PublicCategory
+	return &value
 }
 
 // Round is the cache for one enrollment round.
@@ -83,6 +108,18 @@ type Stats struct {
 	PublicFetchedAt *time.Time `json:"public_fetched_at,omitempty"`
 	// Keywords are the in-plan searches that have contributed so far.
 	Keywords []string `json:"keywords"`
+	// Categories counts the public courses whose category is known, in
+	// dropdown order, and Uncategorized the rest: those only ever seen
+	// through a search that spanned every category.
+	Categories    []CategoryCount `json:"categories"`
+	Uncategorized int             `json:"uncategorized"`
+}
+
+// CategoryCount is how many cached public courses sit in one category.
+type CategoryCount struct {
+	Value int    `json:"value"`
+	Name  string `json:"name"`
+	Count int    `json:"count"`
 }
 
 // MergeResult reports what one merge changed.
@@ -99,6 +136,13 @@ type Query struct {
 	OnlyAvailable bool   `json:"only_available"`
 	Sort          string `json:"sort"`
 	Limit         int    `json:"limit"`
+	// PublicCategory keeps only the courses recorded under that category.
+	// PublicCategoryAll (全部课程) is not a filter and is ignored, exactly as
+	// in the school UI. Courses whose category is unknown never match.
+	PublicCategory *int `json:"public_category,omitempty"`
+	// OnlyUncategorized keeps only the courses whose category is unknown, so
+	// the gaps in a per-category fetch can be found.
+	OnlyUncategorized bool `json:"only_uncategorized,omitempty"`
 }
 
 // Results is the answer to a local search.
@@ -130,7 +174,7 @@ func NewStore(dir string) *Store {
 
 // Merge folds a page of search results into the round's cache and reports what
 // changed. Seat counts and other mutable fields are refreshed on every sighting.
-func (s *Store) Merge(xkid, courseType, keyword string, courses []enrollment.Course) MergeResult {
+func (s *Store) Merge(xkid string, source Source, courses []enrollment.Course) MergeResult {
 	if !validXkid(xkid) || len(courses) == 0 {
 		return MergeResult{}
 	}
@@ -141,7 +185,9 @@ func (s *Store) Merge(xkid, courseType, keyword string, courses []enrollment.Cou
 	cache := s.cacheLocked(xkid)
 	now := time.Now()
 	result := MergeResult{}
-	keyword = strings.TrimSpace(keyword)
+	courseType := source.Type
+	keyword := strings.TrimSpace(source.Keyword)
+	category := source.category()
 
 	for _, course := range courses {
 		if strings.TrimSpace(course.LessonID) == "" {
@@ -153,6 +199,7 @@ func (s *Store) Merge(xkid, courseType, keyword string, courses []enrollment.Cou
 		if !exists {
 			entry := entryFromCourse(course, courseType, now)
 			addKeyword(&entry, keyword)
+			entry.PublicCategory = category
 			cache.round.Entries = append(cache.round.Entries, entry)
 			cache.entries[key] = len(cache.round.Entries) - 1
 			result.Added++
@@ -162,9 +209,16 @@ func (s *Store) Merge(xkid, courseType, keyword string, courses []enrollment.Cou
 		entry := &cache.round.Entries[index]
 		firstSeen := entry.FirstSeenAt
 		keywords := entry.Keywords
+		// A search that spanned every category says nothing about where a
+		// course belongs, so it must not erase a category already learnt.
+		knownCategory := entry.PublicCategory
 		*entry = entryFromCourse(course, courseType, now)
 		entry.FirstSeenAt = firstSeen
 		entry.Keywords = keywords
+		entry.PublicCategory = knownCategory
+		if category != nil {
+			entry.PublicCategory = category
+		}
 		addKeyword(entry, keyword)
 		result.Updated++
 	}
@@ -213,6 +267,9 @@ func (s *Store) Search(xkid string, query Query) Results {
 		if courseType != "" && entry.Type != courseType {
 			continue
 		}
+		if !entryInCategory(entry, query) {
+			continue
+		}
 		if query.OnlyAvailable && parseCount(entry.Remaining) <= 0 {
 			continue
 		}
@@ -239,7 +296,7 @@ func (s *Store) Stats(xkid string) Stats {
 	defer s.mu.Unlock()
 
 	if !validXkid(xkid) {
-		return Stats{Keywords: []string{}}
+		return Stats{Keywords: []string{}, Categories: []CategoryCount{}}
 	}
 
 	cache := s.cacheLocked(xkid)
@@ -252,10 +309,16 @@ func (s *Store) Stats(xkid string) Stats {
 
 	seen := map[string]bool{}
 	keywords := []string{}
+	counts := map[int]int{}
 	for _, entry := range cache.round.Entries {
 		switch entry.Type {
 		case TypePublic:
 			stats.Public++
+			if entry.PublicCategory == nil {
+				stats.Uncategorized++
+			} else {
+				counts[*entry.PublicCategory]++
+			}
 		default:
 			stats.InPlan++
 			for _, keyword := range entry.Keywords {
@@ -268,6 +331,7 @@ func (s *Store) Stats(xkid string) Stats {
 	}
 	sort.Strings(keywords)
 	stats.Keywords = keywords
+	stats.Categories = categoryCounts(counts)
 
 	return stats
 }
@@ -439,10 +503,40 @@ func addKeyword(entry *Entry, keyword string) {
 	entry.Keywords = append(entry.Keywords, keyword)
 }
 
+// entryInCategory applies the query's category filters. Only public courses
+// ever carry a category, so a category filter excludes in-plan courses too.
+func entryInCategory(entry Entry, query Query) bool {
+	if query.OnlyUncategorized && entry.PublicCategory != nil {
+		return false
+	}
+	if !enrollment.NarrowsPublicSearch(query.PublicCategory) {
+		return true
+	}
+	return entry.PublicCategory != nil && *entry.PublicCategory == *query.PublicCategory
+}
+
+// categoryCounts turns the tallies into dropdown-ordered rows, keeping only
+// the categories that actually have courses.
+func categoryCounts(counts map[int]int) []CategoryCount {
+	rows := make([]CategoryCount, 0, len(counts))
+	for value, count := range counts {
+		rows = append(rows, CategoryCount{
+			Value: value,
+			Name:  enrollment.PublicCategoryName(value),
+			Count: count,
+		})
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].Value < rows[j].Value })
+	return rows
+}
+
 func entryMatches(entry Entry, text string) bool {
 	fields := []string{
 		entry.Name, entry.Code, entry.Teacher, entry.Location,
 		entry.Campus, entry.Time, entry.TeachMode, entry.GroupName,
+	}
+	if entry.PublicCategory != nil {
+		fields = append(fields, enrollment.PublicCategoryName(*entry.PublicCategory))
 	}
 	for _, field := range fields {
 		if strings.Contains(strings.ToLower(field), text) {

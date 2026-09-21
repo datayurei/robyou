@@ -56,8 +56,16 @@ type CatalogRefreshRequest struct {
 	// Keyword is required for in-plan searches: the server returns nothing
 	// for an empty in-plan keyword, while an empty public keyword lists the
 	// whole public catalog.
-	Keyword        string `json:"keyword"`
-	PublicCategory *int   `json:"public_category,omitempty"`
+	Keyword string `json:"keyword"`
+	// PublicCategory restricts a public search to one 素质教育类别, and is
+	// what lets the cache record which category a course belongs to: the
+	// result rows never say. PublicCategoryAll (0) and nil both search every
+	// category and teach the cache nothing about categories.
+	PublicCategory *int `json:"public_category,omitempty"`
+	// EachCategory walks the categories one by one instead of searching all
+	// of them at once, so every course fetched lands in the cache with its
+	// category recorded. It costs one paged fetch per category.
+	EachCategory bool `json:"each_category,omitempty"`
 	// IncludeFiltered turns off the server-side filters that hide full,
 	// clashing and restricted courses, so the cache holds the real list.
 	IncludeFiltered bool `json:"include_filtered"`
@@ -465,7 +473,12 @@ func (e *Engine) runTarget(ctx context.Context, job config.Job, index int, targe
 
 	// Every search feeds the cache. For in-plan courses this is the only way
 	// the catalog ever grows, since they cannot be listed without a keyword.
-	if merged := e.catalog.Merge(e.session.Xkid(), target.Type, target.Keyword, courses); merged.Added > 0 {
+	source := catalog.Source{
+		Type:           target.Type,
+		Keyword:        target.Keyword,
+		PublicCategory: target.PublicCategory,
+	}
+	if merged := e.catalog.Merge(e.session.Xkid(), source, courses); merged.Added > 0 {
 		log.Debugf("课程库新增 %d 门课程 (共 %d)", merged.Added, merged.Total)
 	}
 

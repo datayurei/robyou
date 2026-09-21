@@ -34,6 +34,9 @@ const state = {
   levels: new Set(["debug", "info", "success", "warn", "error"]),
   search: "",
   catalog: { stats: null, results: null },
+  // publicCategories is the 素质教育类别 dropdown, fetched from the backend so
+  // the numbers the school system uses only have to be written down once.
+  publicCategories: [],
   scale: 1,
 };
 
@@ -43,6 +46,30 @@ const state = {
 const CATALOG_ROW_LIMIT = 500;
 
 const $ = (id) => document.getElementById(id);
+
+// PUBLIC_CATEGORY_ALL is the dropdown's 「--所有课程--」 entry: category 0 is
+// not a category, it is the absence of a filter.
+const PUBLIC_CATEGORY_ALL = 0;
+
+function categoryName(value) {
+  if (value === null || value === undefined) return "";
+  const found = state.publicCategories.find((category) => category.value === value);
+  return found ? found.name : `类别 ${value}`;
+}
+
+// categoryOptions renders the dropdown, with the "no filter" entry relabelled
+// for wherever it is being used.
+function categoryOptions(selected, allLabel) {
+  const chosen = selected === null || selected === undefined ? PUBLIC_CATEGORY_ALL : selected;
+  return state.publicCategories
+    .map((category) => {
+      const label = category.value === PUBLIC_CATEGORY_ALL ? allLabel : category.name;
+      return `<option value="${category.value}" ${category.value === chosen ? "selected" : ""}>${escapeHTML(
+        label
+      )}</option>`;
+    })
+    .join("");
+}
 
 /* ---------------------------------------------------------------- helpers */
 
@@ -240,10 +267,10 @@ function renderTarget(target, jobIndex, targetIndex, total) {
         ${
           isPublic
             ? `<label class="field">
-                 <span>公选课类别 (留空=全部)</span>
-                 <input type="number" min="0" step="1" ${attrs} data-field="public_category" value="${
-                   target.public_category ?? ""
-                 }" />
+                 <span>公选课类别 (素质教育类别)</span>
+                 <select ${attrs} data-field="public_category">
+                   ${categoryOptions(target.public_category, "全部课程 (不限类别)")}
+                 </select>
                </label>`
             : `<label class="check" style="align-self: end; padding-bottom: 7px;">
                  <input type="checkbox" ${attrs} data-field="continue_after_successful" ${
@@ -315,9 +342,13 @@ function applyFieldEdit(element) {
     case "max_rounds":
       node[field] = Math.max(0, Math.trunc(toNumber(element.value, 0)));
       break;
-    case "public_category":
-      node[field] = element.value.trim() === "" ? null : Math.max(0, Math.trunc(toNumber(element.value, 0)));
+    case "public_category": {
+      // 全部课程 is the school UI's "no filter" entry, so it is stored as an
+      // absent category rather than as the number 0.
+      const value = Math.trunc(toNumber(element.value, PUBLIC_CATEGORY_ALL));
+      node[field] = value === PUBLIC_CATEGORY_ALL ? null : value;
       break;
+    }
     case "fuzzy_filter_keywords":
     case "exact_filter_keywords":
       node[field] = splitList(element.value);
@@ -556,6 +587,15 @@ function renderCatalogStats(stats) {
   if (stats.public_fetched_at) {
     parts.push(`公选全量 ${new Date(stats.public_fetched_at).toLocaleString("zh-CN", { hour12: false })}`);
   }
+  // Categories are only known for courses fetched one category at a time, so
+  // the stats say how much of the public list still has no category.
+  const categories = stats.categories || [];
+  if (categories.length) {
+    parts.push(`已知类别 ${stats.public - stats.uncategorized}`);
+    label.title = categories.map((category) => `${category.name} ${category.count}`).join("、");
+  } else {
+    label.title = "";
+  }
   label.textContent = parts.join(" · ");
 
   $("catalog-fetch-hint").textContent = stats.keywords && stats.keywords.length
@@ -564,13 +604,32 @@ function renderCatalogStats(stats) {
 }
 
 function catalogQuery() {
+  // "none" is the panel's own option for courses no category-restricted
+  // search has reached yet; the backend takes it as a separate flag.
+  const category = $("catalog-category-filter").value;
+
   return {
     text: $("catalog-query").value.trim(),
     type: $("catalog-type-filter").value,
     only_available: $("catalog-only-available").checked,
     sort: $("catalog-sort").value,
     limit: CATALOG_ROW_LIMIT,
+    public_category: category === "" || category === "none" ? null : Number.parseInt(category, 10),
+    only_uncategorized: category === "none",
   };
+}
+
+// renderCategoryPickers fills the three category dropdowns from the list the
+// backend owns: the panel's local filter, the fetch picker and, through
+// renderJobs, the per-target picker.
+function renderCategoryPickers() {
+  const named = state.publicCategories.filter((category) => category.value !== PUBLIC_CATEGORY_ALL);
+
+  $("catalog-category-filter").innerHTML = `<option value="">全部类别</option>
+    ${named.map((category) => `<option value="${category.value}">${escapeHTML(category.name)}</option>`).join("")}
+    <option value="none">未记录类别</option>`;
+
+  $("catalog-fetch-category").innerHTML = categoryOptions(PUBLIC_CATEGORY_ALL, "全部课程 (不限类别)");
 }
 
 async function runLocalSearch() {
@@ -607,6 +666,7 @@ function renderCatalogResults() {
         <td><span class="type-badge" data-type="${escapeHTML(entry.type)}">${
           entry.type === "public" ? "公选" : "计划内"
         }</span></td>
+        <td>${escapeHTML(categoryName(entry.public_category)) || "—"}</td>
         <td>${escapeHTML(entry.teacher)}</td>
         <td>${escapeHTML(entry.time)}</td>
         <td>${escapeHTML(entry.location)}</td>
@@ -622,7 +682,7 @@ function renderCatalogResults() {
   container.innerHTML = `${summary}
     <table class="catalog">
       <thead><tr>
-        <th>课程名</th><th>类型</th><th>教师</th><th>上课时间</th><th>地点</th>
+        <th>课程名</th><th>类型</th><th>类别</th><th>教师</th><th>上课时间</th><th>地点</th>
         <th>校区</th><th>学分</th><th>已选</th><th>剩余</th><th>课程号</th>
       </tr></thead>
       <tbody>${rows}</tbody>
@@ -646,6 +706,9 @@ async function fetchCatalogFromServer() {
     return;
   }
 
+  const category = Number.parseInt($("catalog-fetch-category").value, 10) || PUBLIC_CATEGORY_ALL;
+  const eachCategory = type === "public" && $("catalog-fetch-each-category").checked;
+
   button.disabled = true;
   button.textContent = "获取中…";
 
@@ -653,6 +716,8 @@ async function fetchCatalogFromServer() {
     const result = await api().RefreshCatalog({
       type,
       keyword,
+      public_category: type === "public" && category !== PUBLIC_CATEGORY_ALL ? category : null,
+      each_category: eachCategory,
       include_filtered: $("catalog-include-filtered").checked,
       all: $("catalog-fetch-all").checked,
     });
@@ -878,19 +943,27 @@ function bindEvents() {
   };
   $("catalog-query").addEventListener("input", scheduleLocalSearch);
   $("catalog-type-filter").addEventListener("change", runLocalSearch);
+  $("catalog-category-filter").addEventListener("change", runLocalSearch);
   $("catalog-sort").addEventListener("change", runLocalSearch);
   $("catalog-only-available").addEventListener("change", runLocalSearch);
 
   $("btn-catalog-fetch").addEventListener("click", fetchCatalogFromServer);
+  $("catalog-fetch-each-category").addEventListener("change", (event) => {
+    // Walking every category and picking one are the same control, used two
+    // ways: the picker is meaningless once every category gets its own pass.
+    $("catalog-fetch-category").disabled = event.target.checked;
+  });
   $("catalog-fetch-keyword").addEventListener("keydown", (event) => {
     if (event.key === "Enter") fetchCatalogFromServer();
   });
   $("catalog-fetch-type").addEventListener("change", (event) => {
-    // The whole-list fetch only exists for public electives.
+    // The whole-list fetch, and the categories, only exist for public electives.
     const isInPlan = event.target.value === "inplan";
     $("catalog-fetch-keyword").placeholder = isInPlan
       ? "关键词（计划内课程必填）"
       : "关键词（公选课可留空以获取全部）";
+    $("catalog-fetch-category").hidden = isInPlan;
+    $("catalog-each-category-field").hidden = isInPlan;
   });
 
   $("btn-clear-catalog").addEventListener("click", async () => {
@@ -1015,6 +1088,10 @@ async function main() {
 
   state.paths = await api().ConfigPaths();
   $("config-path").textContent = state.paths.jobs;
+
+  // The category list has to be in hand before anything renders a picker.
+  state.publicCategories = (await api().PublicCategories()) || [];
+  renderCategoryPickers();
 
   await loadConfig();
   await refreshAccountHint();

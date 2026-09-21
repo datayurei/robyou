@@ -185,6 +185,9 @@
                     <option value="inplan">计划内</option>
                     <option value="public">公选课</option>
                   </select>
+                  <select id="catalog-category-filter" title="公选课的素质教育类别，只有按类别获取过的课程才会带类别">
+                    <option value="">全部类别</option>
+                  </select>
                   <select id="catalog-sort">
                     <option value="name">按课程名</option>
                     <option value="remaining">按剩余名额</option>
@@ -210,6 +213,9 @@
                     <option value="inplan">计划内</option>
                   </select>
                   <input type="text" id="catalog-fetch-keyword" placeholder="关键词（公选课可留空以获取全部）" />
+                  <select id="catalog-fetch-category" title="只获取该素质教育类别的公选课，并把类别记进课程库">
+                    <option value="">全部课程 (不限类别)</option>
+                  </select>
                   <button class="btn btn-small btn-primary" id="btn-catalog-fetch">获取</button>
                 </div>
                 <div class="control-row">
@@ -220,6 +226,10 @@
                   <label class="check inline">
                     <input type="checkbox" id="catalog-include-filtered" checked />
                     <span>包含已满 / 冲突 / 限选课程</span>
+                  </label>
+                  <label class="check inline" id="catalog-each-category-field">
+                    <input type="checkbox" id="catalog-fetch-each-category" />
+                    <span title="逐个类别各搜一遍，课程库才知道每门课属于哪个类别，代价是 7 次搜索">按类别逐个获取</span>
                   </label>
                   <span class="hint" id="catalog-fetch-hint"></span>
                 </div>

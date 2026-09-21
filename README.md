@@ -164,8 +164,16 @@ Target fields:
 - `type`: `inplan` for planned courses, `public` for public electives.
 - `keyword`: course search keyword.
 - `enabled`: whether this target is active.
-- `public_category`: optional public-course category number. Omit it to search all
-  categories; `1` restricts to the first category shown by the school UI (e.g. 体育课).
+- `public_category`: optional public-course category (素质教育类别). The numbers are the
+  school UI's dropdown read top to bottom from zero, so `0` is its 「--所有课程--」 entry
+  and searches every category, exactly like omitting the field:
+
+  | value | category | value | category |
+  | --- | --- | --- | --- |
+  | `0` | 全部课程 (no filter) | `4` | 公民与社会选修课 |
+  | `1` | 体育课 | `5` | 文化与价值选修课 |
+  | `2` | 艺术教育课 | `6` | 科学与科学方法选修课 |
+  | `3` | 书院实践（劳动）课程 | `7` | 其他通识课 |
 - `filters`: optional raw search filters sent to the school system, applied last and
   overriding the defaults. Documented in `docs/enrollment-api.md` §3.1.
 - `fuzzy_filter_keywords`: skip courses whose name or teacher *contains* any keyword.
@@ -205,6 +213,22 @@ differently:
 包含已满 / 冲突 / 限选课程 turns off the server-side filters (`sfym`, `sfct`, `sfxx`),
 so the cache holds the real list rather than only what a polling job would act on.
 
+### Public-elective categories (素质教育类别)
+
+Search results carry no category of their own — the school system only *filters* by
+one (`szjylb`, listed under `public_category` above). So the cache learns a course's
+category from the search that found it: any search restricted to a category files its
+results under that category, whether it came from the 课程库 tab or from a polling job
+whose target sets `public_category`.
+
+按类别逐个获取 walks the seven categories one at a time, one paged fetch each, so every
+public course in the cache ends up with its category recorded — the price is seven
+searches instead of one. Afterwards the 类别 dropdown in 本地搜索 filters the library
+offline, 未记录类别 shows the courses no category-restricted search has reached yet,
+and the category name is matched by the text box as well. The 课程库 stats line counts
+how many public courses have a known category, with the per-category breakdown in its
+tooltip.
+
 Caches live in `catalog/<xkid>.json` next to the other configuration files, one file
 per round, and are reloaded on the next start.
 
@@ -236,7 +260,8 @@ go run ./cmd/public_search_probe -keyword 心理
 Useful flags:
 
 - `-secret`: credential file path, defaults to `secret.json`
-- `-public-category`: optional public-course category number for `szjylb`
+- `-public-category`: optional public-course category number for `szjylb` (see the
+  table under `public_category` above); negative means unset
 - `-rps`: request pace for the probe; `0` disables pacing
 - `-raw`: print the full raw response body
 - `-print-curl`: print a replayable `curl` command with the live cookie header

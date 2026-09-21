@@ -24,10 +24,14 @@ const catalogXkid = "A1B2C3D4E5F60718293A4B5C6D7E8F90"
 // catalogServer stands in for the search endpoint and records what it was
 // asked for. It answers with pageSize rows until total is exhausted.
 type catalogServer struct {
-	mu      sync.Mutex
-	total   int
-	queries []url.Values
-	forms   []url.Values
+	mu sync.Mutex
+	// total is how many rows one search has to offer. With perCategory set,
+	// every category offers that many rows of its own, so a course's id says
+	// which category it came from — the real server gives no such hint.
+	total       int
+	perCategory bool
+	queries     []url.Values
+	forms       []url.Values
 }
 
 func (c *catalogServer) handler() http.HandlerFunc {
@@ -42,10 +46,15 @@ func (c *catalogServer) handler() http.HandlerFunc {
 		start := atoiOr(r.PostForm.Get("iDisplayStart"), 0)
 		length := atoiOr(r.PostForm.Get("iDisplayLength"), enrollment.DefaultPageSize)
 
+		prefix := ""
+		if c.perCategory {
+			prefix = r.URL.Query().Get("szjylb") + "-"
+		}
+
 		rows := []map[string]any{}
 		for i := start; i < start+length && i < c.total; i++ {
 			rows = append(rows, map[string]any{
-				"jx0404id": fmt.Sprintf("lesson-%d", i),
+				"jx0404id": fmt.Sprintf("lesson-%s%d", prefix, i),
 				"jx02id":   fmt.Sprintf("course-%d", i),
 				"kcmc":     fmt.Sprintf("课程 %d", i),
 				"skls":     "张三",
@@ -280,5 +289,105 @@ func TestClearCatalog(t *testing.T) {
 	}
 	if got := runner.CatalogStats().Total; got != 0 {
 		t.Fatalf("catalog total after clear = %d", got)
+	}
+}
+
+func TestRefreshCatalogSendsTheRequestedCategory(t *testing.T) {
+	stub := &catalogServer{total: 3}
+	runner := newCatalogEngine(t, stub)
+	category := 4
+
+	if _, err := runner.RefreshCatalog(context.Background(), CatalogRefreshRequest{
+		Type:           config.TypePublic,
+		PublicCategory: &category,
+		All:            true,
+	}); err != nil {
+		t.Fatalf("RefreshCatalog() = %v", err)
+	}
+
+	stub.mu.Lock()
+	sent := stub.queries[0].Get("szjylb")
+	stub.mu.Unlock()
+	if sent != "4" {
+		t.Fatalf("szjylb = %q, want 4", sent)
+	}
+
+	// Every course fetched under a category is filed under it, and a fetch
+	// that saw only one category has not seen the whole catalog.
+	stats := runner.CatalogStats()
+	if len(stats.Categories) != 1 || stats.Categories[0].Value != 4 || stats.Categories[0].Count != 3 {
+		t.Fatalf("categories = %+v", stats.Categories)
+	}
+	if stats.PublicFetchedAt != nil {
+		t.Fatal("a single-category fetch is not a full catalog fetch")
+	}
+}
+
+func TestRefreshCatalogEachCategoryWalksTheDropdown(t *testing.T) {
+	stub := &catalogServer{total: 2, perCategory: true}
+	runner := newCatalogEngine(t, stub)
+
+	result, err := runner.RefreshCatalog(context.Background(), CatalogRefreshRequest{
+		Type:         config.TypePublic,
+		EachCategory: true,
+		All:          true,
+	})
+	if err != nil {
+		t.Fatalf("RefreshCatalog() = %v", err)
+	}
+
+	stub.mu.Lock()
+	sent := []string{}
+	for _, query := range stub.queries {
+		sent = append(sent, query.Get("szjylb"))
+	}
+	stub.mu.Unlock()
+
+	// 全部课程 is skipped: it is the dropdown's "no filter" entry, and a
+	// course found through it would land in the cache without a category.
+	if strings.Join(sent, ",") != "1,2,3,4,5,6,7" {
+		t.Fatalf("categories searched = %v", sent)
+	}
+	if result.Fetched != 14 {
+		t.Fatalf("fetched = %d, want 2 courses in each of the 7 categories", result.Fetched)
+	}
+
+	stats := runner.CatalogStats()
+	if len(stats.Categories) != 7 || stats.Uncategorized != 0 {
+		t.Fatalf("stats = %+v, want every course filed under a category", stats)
+	}
+	if stats.PublicFetchedAt == nil {
+		t.Fatal("walking every category with no keyword does fetch the whole catalog")
+	}
+
+	// The category is a local filter afterwards, with no further requests.
+	sport := 1
+	if got := runner.SearchCatalog(catalog.Query{PublicCategory: &sport}); len(got.Entries) != 2 {
+		t.Fatalf("体育课 search returned %d entries, want 2", len(got.Entries))
+	}
+}
+
+func TestPollingSearchRecordsTheTargetCategory(t *testing.T) {
+	stub := &catalogServer{total: 2}
+	runner := newCatalogEngine(t, stub)
+	category := 5
+
+	job := config.Job{ID: "job-1", Name: "job", Enabled: true}
+	target := config.Target{
+		Name:           "t",
+		Type:           config.TypePublic,
+		Keyword:        "价值",
+		Enabled:        true,
+		PublicCategory: &category,
+	}
+	runner.status.setJobs([]JobStatus{{ID: "job-1", Targets: []TargetStatus{{Name: "t"}}}})
+
+	if _, err := runner.runTarget(context.Background(), job, 0, target); err != nil {
+		t.Fatalf("runTarget() = %v", err)
+	}
+
+	stats := runner.CatalogStats()
+	if len(stats.Categories) != 1 || stats.Categories[0].Value != category {
+		t.Fatalf("categories = %+v, want the target's category recorded", stats.Categories)
 	}
 }

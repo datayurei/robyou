@@ -248,7 +248,8 @@ func TestEnsureRoundKeepsWaitingUntilCancelled(t *testing.T) {
 	var checks int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&checks, 1)
-		// The portal before enrollment opens: no round link at all.
+		// Enrollment before it opens: this stands in for both the portal
+		// and the round list, and neither carries a round.
 		w.Write([]byte(`<html><body><a href="/jsxsd/xsxx/xsxxxx">学生信息</a></body></html>`))
 	}))
 	defer server.Close()

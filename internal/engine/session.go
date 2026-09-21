@@ -17,6 +17,10 @@ import (
 const (
 	ssoLoginURL = "https://sso.stu.edu.cn/login?service=http%3A%2F%2Fjw.stu.edu.cn%2F"
 	portalURL   = "https://jw.stu.edu.cn/jsxsd/framework/xsrkxz.htmlx"
+	// roundListPath is where the round list lives, resolved against baseURL.
+	// It used to be scraped off the portal, but the portal does not always
+	// render that link even when a round is open, so the path is fixed.
+	roundListPath = "jsxsd/xsxk/xklc_list"
 )
 
 // ErrRoundNotOpen means the login worked but no course-selection round is
@@ -109,11 +113,11 @@ func (s *Session) Bootstrap(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("打开教务首页时被跳转到登录页: %w", enrollment.ErrSessionExpired)
 	}
 
-	// roundURL, ok := parser.ExtractXklcWithBase(portal, s.baseURL)
-	// if !ok {
-	// 	return "", fmt.Errorf("%w: 教务首页没有选课入口链接 (no xklc_list link on the portal)", ErrRoundNotOpen)
-	// }
-	roundURL := "https://jw.stu.edu.cn/jsxsd/xsxk/xklc_list"
+	// The round list is addressed directly rather than followed from the
+	// portal: the link is missing often enough that scraping it reported
+	// enrollment as closed while it was open. The portal fetch above still
+	// earns its keep — it is what proves the session is alive first.
+	roundURL := strings.TrimSuffix(s.baseURL, "/") + "/" + roundListPath
 
 	roundPage, err := s.client.Get(ctx, roundURL)
 	if err != nil {

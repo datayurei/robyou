@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/datayurei/robyou/enrollment"
@@ -52,7 +53,10 @@ func TestBootstrapReportsRoundNotOpen(t *testing.T) {
 		handler http.HandlerFunc
 	}{
 		{
-			name: "portal has no round link",
+			// Bootstrap no longer reads the portal's link, so a portal
+			// without one is not itself the failure; it is the round
+			// list served at the fixed path that has no round on it.
+			name: "round list carries no round table",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.Write([]byte(portalClosedHTML))
 			},
@@ -85,6 +89,42 @@ func TestBootstrapReportsRoundNotOpen(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBootstrapAddressesRoundListDirectly locks in the fixed round-list path:
+// the portal here carries no xklc_list link at all, and the round list must
+// still be fetched. A success path cannot be asserted instead, because the
+// InitializeSession call that follows targets enrollment.BaseURL rather than
+// the stub, so this stops at the empty-list case.
+func TestBootstrapAddressesRoundListDirectly(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+
+	session, _ := newTestSession(t, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+
+		if strings.Contains(r.URL.Path, "xklc_list") {
+			w.Write([]byte(roundListEmptyHTML))
+			return
+		}
+		w.Write([]byte(portalClosedHTML))
+	})
+
+	if _, err := session.Bootstrap(context.Background()); !errors.Is(err, ErrRoundNotOpen) {
+		t.Fatalf("Bootstrap() = %v, want ErrRoundNotOpen", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := "/" + roundListPath
+	for _, path := range paths {
+		if path == want {
+			return
+		}
+	}
+	t.Fatalf("round list was never requested: got paths %v, want one of them %q", paths, want)
 }
 
 func TestBootstrapReportsSessionExpired(t *testing.T) {

@@ -5,4 +5,3 @@ enroll_config.json
 # Wails build output and generated bindings
 build/bin/
 frontend/wailsjs/
-dist/

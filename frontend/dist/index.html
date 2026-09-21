@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Robyou 选课助手</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="logo">R</span>
+        <div>
+          <h1>Robyou</h1>
+          <p class="subtitle">STU 选课助手</p>
+        </div>
+      </div>
+
+      <div class="session" id="session-summary">
+        <span class="pill" id="phase-pill" data-phase="idle">未开始</span>
+        <span class="meta" id="session-meta">未登录</span>
+      </div>
+
+      <div class="zoom" title="界面缩放：Ctrl + 加号 / 减号 / 0，或按住 Ctrl 滚动">
+        <button class="btn btn-small" id="btn-scale-down" aria-label="缩小界面">−</button>
+        <button class="btn btn-small" id="btn-scale-reset" aria-label="恢复默认缩放">100%</button>
+        <button class="btn btn-small" id="btn-scale-up" aria-label="放大界面">+</button>
+      </div>
+
+      <div class="actions">
+        <button class="btn btn-primary" id="btn-start">开始选课</button>
+        <button class="btn btn-danger" id="btn-stop" disabled>停止</button>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="column column-left">
+        <article class="card" id="card-account">
+          <header class="card-head">
+            <h2>账号</h2>
+            <span class="hint" id="account-hint"></span>
+          </header>
+          <div class="card-body">
+            <label class="field">
+              <span>学号</span>
+              <input type="text" id="input-username" autocomplete="username" placeholder="学号" />
+            </label>
+            <label class="field">
+              <span>密码</span>
+              <input type="password" id="input-password" autocomplete="current-password" placeholder="密码" />
+            </label>
+            <label class="check">
+              <input type="checkbox" id="input-remember" />
+              <span>保存到本地 secret.json</span>
+            </label>
+            <div class="row">
+              <button class="btn btn-primary" id="btn-login">登录并进入选课</button>
+              <button class="btn btn-ghost" id="btn-forget">删除已保存账号</button>
+            </div>
+          </div>
+        </article>
+
+        <article class="card" id="card-global">
+          <header class="card-head">
+            <h2>全局设置</h2>
+            <span class="hint" id="config-path"></span>
+          </header>
+          <div class="card-body">
+            <label class="field">
+              <span>任务执行方式</span>
+              <select id="input-mode">
+                <option value="sequence">顺序执行 — 上一个任务结束后再开始下一个</option>
+                <option value="concurrent">并发执行 — 所有任务同时轮询</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>
+                请求速率 (rps)
+                <em class="inline-hint">建议 1.00，越高越容易被服务器限制</em>
+              </span>
+              <div class="rate-row">
+                <input type="number" id="input-rps" min="0" step="0.05" />
+                <span class="rate-readout" id="rate-readout"></span>
+              </div>
+            </label>
+            <div class="rate-presets">
+              <button class="chip" data-rps="0.2">0.2 rps</button>
+              <button class="chip" data-rps="0.5">0.5 rps</button>
+              <button class="chip" data-rps="1">1 rps (建议)</button>
+              <button class="chip" data-rps="2">2 rps</button>
+              <button class="chip" data-rps="0">不限速</button>
+            </div>
+            <p class="warn" id="rate-warning" hidden>
+              当前速率高于建议值。所有任务共用同一个限速器，请求会被合并计算。
+            </p>
+
+            <label class="field">
+              <span>登录状态检查间隔 (秒，0 表示关闭)</span>
+              <input type="number" id="input-login-check" min="0" step="10" />
+            </label>
+
+            <label class="field">
+              <span>
+                选课未开放时的检查间隔 (秒)
+                <em class="inline-hint">选课未开始时会一直等待并按此间隔重试</em>
+              </span>
+              <input type="number" id="input-round-retry" min="1" step="5" />
+            </label>
+
+            <div class="row">
+              <button class="btn btn-primary" id="btn-save">保存配置</button>
+              <button class="btn btn-ghost" id="btn-reload">放弃修改</button>
+              <button class="btn btn-ghost" id="btn-reset">恢复示例配置</button>
+              <span class="dirty" id="dirty-flag" hidden>有未保存的修改</span>
+            </div>
+          </div>
+        </article>
+
+        <article class="card card-grow" id="card-jobs">
+          <header class="card-head">
+            <h2>任务</h2>
+            <button class="btn btn-small" id="btn-add-job">+ 新建任务</button>
+          </header>
+          <div class="card-body" id="jobs-container"></div>
+        </article>
+      </section>
+
+      <section class="column column-right">
+        <article class="card" id="card-progress">
+          <header class="card-head">
+            <h2>运行状态</h2>
+            <span class="hint" id="progress-hint"></span>
+          </header>
+          <div class="card-body" id="progress-container">
+            <p class="empty">尚未开始运行。</p>
+          </div>
+        </article>
+
+        <article class="card card-grow" id="card-workspace">
+          <header class="card-head tabbed">
+            <div class="tabs" id="workspace-tabs">
+              <button class="tab active" data-tab="log">日志</button>
+              <button class="tab" data-tab="catalog">课程库</button>
+            </div>
+
+            <div class="log-tools" data-tools="log">
+              <input type="search" id="log-search" placeholder="过滤关键词" />
+              <label class="check inline">
+                <input type="checkbox" id="log-autoscroll" checked />
+                <span>自动滚动</span>
+              </label>
+              <button class="btn btn-small" id="btn-export-log">导出</button>
+              <button class="btn btn-small btn-ghost" id="btn-clear-log">清空</button>
+            </div>
+
+            <div class="log-tools" data-tools="catalog" hidden>
+              <span class="hint" id="catalog-stats">课程库为空</span>
+              <button class="btn btn-small btn-ghost" id="btn-clear-catalog">清空缓存</button>
+            </div>
+          </header>
+
+          <div class="tab-panel" data-panel="log">
+            <div class="log-levels" id="log-levels">
+              <button class="chip active" data-level="debug">调试</button>
+              <button class="chip active" data-level="info">信息</button>
+              <button class="chip active" data-level="success">成功</button>
+              <button class="chip active" data-level="warn">警告</button>
+              <button class="chip active" data-level="error">错误</button>
+            </div>
+            <div class="log-view" id="log-view"></div>
+          </div>
+
+          <div class="tab-panel" data-panel="catalog" hidden>
+            <div class="catalog-controls">
+              <div class="control-block">
+                <div class="block-title">
+                  <span class="dot local"></span>本地搜索
+                  <em class="inline-hint">只查缓存，不发请求，随输随出</em>
+                </div>
+                <div class="control-row">
+                  <input type="search" id="catalog-query" placeholder="课程名 / 课程号 / 教师 / 上课地点" />
+                  <select id="catalog-type-filter">
+                    <option value="">全部类型</option>
+                    <option value="inplan">计划内</option>
+                    <option value="public">公选课</option>
+                  </select>
+                  <select id="catalog-sort">
+                    <option value="name">按课程名</option>
+                    <option value="remaining">按剩余名额</option>
+                    <option value="teacher">按教师</option>
+                    <option value="code">按课程号</option>
+                    <option value="recent">按最近更新</option>
+                  </select>
+                  <label class="check inline">
+                    <input type="checkbox" id="catalog-only-available" />
+                    <span>只看有余量</span>
+                  </label>
+                </div>
+              </div>
+
+              <div class="control-block">
+                <div class="block-title">
+                  <span class="dot server"></span>服务器搜索
+                  <em class="inline-hint">向教务系统发请求，受限速约束，结果会写入课程库</em>
+                </div>
+                <div class="control-row">
+                  <select id="catalog-fetch-type">
+                    <option value="public">公选课</option>
+                    <option value="inplan">计划内</option>
+                  </select>
+                  <input type="text" id="catalog-fetch-keyword" placeholder="关键词（公选课可留空以获取全部）" />
+                  <button class="btn btn-small btn-primary" id="btn-catalog-fetch">获取</button>
+                </div>
+                <div class="control-row">
+                  <label class="check inline">
+                    <input type="checkbox" id="catalog-fetch-all" checked />
+                    <span>翻页获取全部结果</span>
+                  </label>
+                  <label class="check inline">
+                    <input type="checkbox" id="catalog-include-filtered" checked />
+                    <span>包含已满 / 冲突 / 限选课程</span>
+                  </label>
+                  <span class="hint" id="catalog-fetch-hint"></span>
+                </div>
+              </div>
+            </div>
+
+            <div class="catalog-results" id="catalog-results"></div>
+          </div>
+        </article>
+
+    </main>
+
+    <div class="toast-stack" id="toast-stack"></div>
+
+    <script src="app.js"></script>
+  </body>
+</html>

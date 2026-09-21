@@ -1,6 +1,8 @@
 secret.json
 cookies.json
 enroll_config.json
+# Course cache written by the app next to a portable config.
+/catalog/
 
 # Wails build output and generated bindings
 build/bin/
